@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="책·문구·굿즈를 사고, 영수증 기준으로 환불과 보상을 빠르게 처리해 주는 온라인 서점 (데모)" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" href="/logo.png" type="image/png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <title>캣북스 · 책과 문구, 고양이가 지키는 서점</title>
+    <!-- 첫 화면이 그려지기 전에 테마를 적용한다 (흰 화면 깜빡임 방지) -->
+    <script>try{var t=localStorage.getItem('theme');if(t!=='light'&&t!=='dark')t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';var r=document.documentElement;r.dataset.theme=t;if(t==='dark')r.classList.add('dark')}catch(e){}</script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
