@@ -2,17 +2,17 @@ import { Link } from "@/lib/nav";
 import { useParams, useRouter, useSearchParams } from "@/lib/nav";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { AxClaimDialog, axClaimTypes } from "@/components/shop/AxClaimDialog";
-import { AxClaimStatusBadge, AxClaimSummary } from "@/components/shop/AxClaimSummary";
+import { ClaimsLoadError, MyClaimCard, useMyClaims } from "@/components/shop/MyClaimCard";
 import { ErrorNote, NotReady, RequireLogin } from "@/components/shop/bits";
 import { Cover } from "@/components/shop/Cover";
 import { TossWidgetBox } from "@/components/shop/TossWidgetBox";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { dateStr, hueOf, shortDateTime, won } from "@/lib/format";
-import { CLAIM_REASON_KO, CLAIM_TYPE_KO, ORDER_STATUS_KO, ORDER_STATUS_TONE, PAYMENT_KO } from "@/lib/labels";
+import { ORDER_STATUS_KO, ORDER_STATUS_TONE, PAYMENT_KO } from "@/lib/labels";
 import { failureGuide, lastFailedPayment, supportHref } from "@/lib/payment";
 import { failHref, isInputError, TossRequestError, usePayPath, useTossWidget } from "@/lib/toss";
-import type { Claim, Order } from "@/lib/types";
+import type { Order } from "@/lib/types";
 
 export default function OrderPage() {
   return <Suspense><Detail /></Suspense>;
@@ -25,7 +25,6 @@ function Detail() {
   const payHint = search.get("payhint") === "1"; // 결제 화면에서 위젯 입력이 모자라 넘어온 경우(문구는 고정)
   const { user, ready } = useAuth();
   const [o, setO] = useState<Order | null>(null);
-  const [claims, setClaims] = useState<Claim[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [claimOpen, setClaimOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -33,6 +32,7 @@ function Detail() {
   const inflight = useRef(false); // 결제 요청 중 플래그: state 반영 전의 연속 클릭도 막는다
   const router = useRouter();
   const path = usePayPath();
+  const { claims, failed: claimsFailed, reload: reloadClaims } = useMyClaims(user?.id, id);
 
   const load = useCallback(async () => {
     try { setO(await api.order(id)); setError(null); } catch (e) { setError((e as Error).message); }
@@ -173,21 +173,13 @@ function Detail() {
             {axClaimTypes(o).length > 0 && <button className="btn-ghost" onClick={() => setClaimOpen(true)}>{o.delivered_at ? "반품·교환 신청" : "취소 신청"}</button>}
           </div>
 
-          {claims.map((c) => (
-            <div key={c.id}>
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                <AxClaimStatusBadge status={c.status} />
-                <span className="text-sm font-semibold">{CLAIM_TYPE_KO[c.type]} · {CLAIM_REASON_KO[c.reason]}</span>
-                <span className="text-xs text-ink-500">#{c.id} · {shortDateTime(c.created_at)}</span>
-              </div>
-              <AxClaimSummary c={c} />
-            </div>
-          ))}
-          {/* TODO(ax-backend#385): 신청 내역 조회·철회·사진 추가, 후기 작성 API가 생기면 연결한다 */}
-          <NotReady feature="신청 내역 조회·철회, 후기 작성" />
+          <ClaimsLoadError failed={claimsFailed} onRetry={() => { void reloadClaims(); }} />
+          {claims.map((c) => <MyClaimCard key={c.id} c={c} />)}
+          {/* TODO(ax-backend#385): 신청 철회·사진 추가, 후기 작성 API가 생기면 연결한다 */}
+          <NotReady feature="신청 철회, 후기 작성" />
         </div>
       )}
-      {o && claimOpen && <AxClaimDialog order={o} onClose={() => setClaimOpen(false)} onDone={(c) => { setClaims((l) => [c, ...l]); load(); }} />}
+      {o && claimOpen && <AxClaimDialog order={o} onClose={() => setClaimOpen(false)} onDone={() => { void reloadClaims(); load(); }} />}
     </RequireLogin>
   );
 }

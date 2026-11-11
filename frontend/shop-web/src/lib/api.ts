@@ -1,5 +1,5 @@
 import { SHOP_API_URL } from "./env";
-import type { Banner, CartPrice, Category, Claim, ClaimInput, DemoUser, Inquiry, InquiryInput, Order, OrderLineInput, PaymentConfig, Product, Seller, TossPrepared } from "./types";
+import type { Banner, CartPrice, Category, ClaimInput, ClaimReceipt, DemoUser, IdeaInput, IdeaReceipt, Inquiry, InquiryInput, MyClaim, MyIdea, Order, OrderLineInput, PaymentConfig, Product, Seller, TossPrepared } from "./types";
 
 // 판매 사이트 → shop-api(`/api/shop/*`)의 모든 호출은 이 파일 한 곳에 둔다.
 // 성공은 `{data, meta}`, 실패는 `{error: {code, message}}`. 로그인·토큰은 없고 구매자는 가명 ID(`buy_0001`…)다.
@@ -79,11 +79,19 @@ export const api = {
   tossConfirm: (b: { toss_order_id: string; payment_key: string; amount: number }) => post<Order>("/api/shop/payments/toss/confirm", b),
   /** 결제 전(pending_payment·payment_failed) 주문만 취소된다. 결제 후 취소·환불은 클레임으로 한다. */
   cancel: (orderId: string) => post<Order>(`/api/shop/orders/${encodeURIComponent(orderId)}/cancel`, { reason_code: "buyer" }),
-  /** 고객 신청 → shop-api → 고객지원. 금액은 보내지 않는다(고객지원이 주문 사실로 계산). */
-  submitClaim: (b: ClaimInput) => post<Claim>("/api/shop/claims", b),
+  /** 고객 신청 → shop-api에 저장 → AXcellent가 읽어 가 판정. 금액은 보내지 않는다(고객지원이 주문 사실로 계산). */
+  submitClaim: (b: ClaimInput) => post<ClaimReceipt>("/api/shop/claims", b),
+  /** 내 신청과 AXcellent가 적어 준 결과. 판매 서버에 저장된 것을 읽는다. */
+  myClaims: (buyerId: string, orderId?: string) =>
+    request<MyClaim[]>(`/api/shop/claims?buyer_id=${encodeURIComponent(buyerId)}${orderId ? `&order_id=${encodeURIComponent(orderId)}` : ""}`),
 
   /** 1:1 문의 접수(토큰 없음). 주문이 필수이며 shop-api가 고객지원으로 넘긴다. 같은 내용을 10분 안에 다시 보내면 같은 접수로 처리된다. */
   submitInquiry: (b: InquiryInput) => post<Inquiry>("/api/shop/inquiries", b),
+
+  /** 고객의 소리(아이디어) 접수. 문의·불만과 따로 받고 하루 5건까지다. 환불·취소류는 처리 결과가 "문의로 안내"로 돌아온다. */
+  submitIdea: (b: IdeaInput) => post<IdeaReceipt>("/api/shop/ideas", b),
+  /** 내 아이디어 내역: 번호·종류·앞부분 30자·처리 상태·안내 한 줄. 판매 서버에 저장된 것을 읽는다(원문은 없다). */
+  myIdeas: (buyerId: string) => request<MyIdea[]>(`/api/shop/ideas?buyer_id=${encodeURIComponent(buyerId)}`),
 
   /** 데모 구매자 목록(가명 ID + 표시용 이름). 적립금은 없다. */
   demoUsers: () => request<DemoUser[]>("/api/shop/users"),
@@ -100,9 +108,8 @@ export const api = {
   cartPrice: (items: OrderLineInput[], pointsUsed = 0) => post<CartPrice>("/api/shop/cart/price", { items, points_used: pointsUsed }),
 
   // --- shop-api에 아직 없는 것: ax-backend#385 결과로 연결 --------------------
-  // TODO(ax-backend#385): 클레임 환불액 미리보기, 신청 내역 조회·철회·사진 추가
+  // TODO(ax-backend#385): 클레임 환불액 미리보기, 신청 철회·사진 추가
   previewClaim: (_b: ClaimInput) => notReady<never>("환불액 미리보기"),
-  claims: (_buyerId: string) => notReady<never>("신청 내역 조회"),
   // TODO(ax-backend#385): 문의 내역 조회(shop-api에 목록 API 없음)
   inquiryHistory: (_buyerId: string) => notReady<never>("문의 내역 조회"),
   // TODO(ax-backend#385): 후기

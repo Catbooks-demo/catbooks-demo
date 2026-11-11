@@ -1,18 +1,16 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "@/lib/nav";
 import { Empty, ErrorNote, NotReady, PageTitle, RequireLogin } from "@/components/shop/bits";
+import { IdeaBox } from "@/components/shop/IdeaBox";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { dateStr, won } from "@/lib/format";
+import { codePoints, dateStr, won } from "@/lib/format";
 import { ORDER_STATUS_KO, STATUS_KO } from "@/lib/labels";
 import type { Inquiry, Order } from "@/lib/types";
 
 // 서버 한도(shop-api: 본문 2000자, 제목 100자)와 같다. 서버 검증이 최종이고 화면은 먼저 막기만 한다.
 const MAX_BODY = 2000;
 const MAX_SUBJECT = 100;
-
-// 서버는 공백을 다듬은 뒤 코드포인트로 센다. 이모지 등이 UTF-16 길이와 어긋나지 않게 맞춘다.
-const count = (s: string) => [...s].length;
 
 /** 오류 코드별 안내. 원인을 짐작해 적지 않고, 코드가 알려 주는 사실만 말한다. */
 function inquiryErrorText(e: unknown): string {
@@ -67,8 +65,8 @@ export default function SupportPage() {
   }, [buyer, wanted]);
 
   const picked = orders?.find((o) => o.order_id === orderId) ?? null;
-  const subjectLen = count(subject.trim());
-  const bodyLen = count(body.trim());
+  const subjectLen = codePoints(subject.trim());
+  const bodyLen = codePoints(body.trim());
   const subjectOver = subjectLen > MAX_SUBJECT;
   const bodyOver = bodyLen > MAX_BODY;
   const canSend = !!picked && bodyLen > 0 && !bodyOver && !subjectOver && !sending;
@@ -152,6 +150,7 @@ export default function SupportPage() {
           </form>
         )}
         <div className="mt-4"><NotReady feature="문의 내역 조회" /></div>
+        {buyer && <IdeaBox key={buyer} buyerId={buyer} />}
         <p className="mt-4 text-sm text-ink-500">주문과 관련한 신청은 <Link href="/orders" className="font-semibold text-brand-600 underline">주문·배송</Link>에서 하세요.</p>
       </RequireLogin>
     </div>
