@@ -1,4 +1,4 @@
-# 빌드 컨텍스트는 레포 루트: docker build -f shop-api/Dockerfile .
+# 빌드 컨텍스트는 backend/: docker build -f shop-api/Dockerfile backend
 FROM python:3.12-slim
 COPY --from=ghcr.io/astral-sh/uv:0.13.1 /uv /uvx /bin/
 

@@ -1,12 +1,12 @@
 services:
   shop-api:
     build:
-      context: ../..
-      dockerfile: shared/shop-api/Dockerfile
+      context: ..
+      dockerfile: shop-api/Dockerfile
     ports:
       - "8010:8010"
     env_file:
-      - path: ../../.env
+      - path: ../.env
         required: false
       - path: ./.env
         required: false

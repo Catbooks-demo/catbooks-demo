@@ -13,7 +13,7 @@ from ax_agent_template import events
 from ax_shop_api.db import Db
 from ax_shop_api.main import create_app
 
-SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "shop_traffic.py"
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "shop_traffic.py"
 _spec = importlib.util.spec_from_file_location("shop_traffic", SCRIPT)
 assert _spec and _spec.loader
 traffic = importlib.util.module_from_spec(_spec)

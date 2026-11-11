@@ -1,0 +1,24 @@
+# uv workspace 루트 (가상 루트: 자체 패키지 없음)
+# shop-api: 판매 서버. vendor/: AXcellent 공통 패키지 사본 (Axcellent-bs dev d052b6a4, vendor/README.md)
+[tool.uv.workspace]
+members = ["shop-api", "vendor/*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["shop-api/src", "vendor/*/src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+testpaths = ["shop-api/tests", "infra/fault-injection"]
+asyncio_default_fixture_loop_scope = "function"
