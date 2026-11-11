@@ -1,3 +1,5 @@
+/** 서버가 센 방식(코드포인트)으로 글자 수를 센다. 이모지 등이 UTF-16 길이와 어긋나지 않게 한다. */
+export const codePoints = (s: string) => [...s].length;
 export const won = (n: number) => `${n.toLocaleString("ko-KR")}원`;
 
 const kst = (iso: string) => new Date(iso);

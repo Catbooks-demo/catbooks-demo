@@ -1,21 +1,21 @@
 import { useEffect, useState } from "react";
 import { Link } from "@/lib/nav";
 import { AxClaimDialog, axClaimTypes } from "@/components/shop/AxClaimDialog";
-import { AxClaimStatusBadge, AxClaimSummary } from "@/components/shop/AxClaimSummary";
+import { ClaimsLoadError, MyClaimCard, useMyClaims } from "@/components/shop/MyClaimCard";
 import { Empty, ErrorNote, NotReady, PageTitle, RequireLogin } from "@/components/shop/bits";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { dateStr, shortDateTime, won } from "@/lib/format";
-import { CLAIM_REASON_KO, CLAIM_TYPE_KO, ORDER_STATUS_KO, ORDER_STATUS_TONE } from "@/lib/labels";
-import type { Claim, Order } from "@/lib/types";
+import { dateStr, won } from "@/lib/format";
+import { ORDER_STATUS_KO, ORDER_STATUS_TONE } from "@/lib/labels";
+import type { Order } from "@/lib/types";
 
 export default function OrdersPage() {
   const { user, ready } = useAuth();
   const [orders, setOrders] = useState<Order[] | null>(null);
-  const [claims, setClaims] = useState<Record<string, Claim[]>>({});
   const [target, setTarget] = useState<Order | null>(null);
   const [error, setError] = useState<string | null>(null);
   const buyer = user?.id;
+  const { claims, failed: claimsFailed, reload: reloadClaims } = useMyClaims(buyer);
 
   useEffect(() => {
     if (!buyer) return;
@@ -26,8 +26,8 @@ export default function OrdersPage() {
     return () => { live = false; };
   }, [buyer]);
 
-  function done(c: Claim) {
-    setClaims((m) => ({ ...m, [c.order_id]: [c, ...(m[c.order_id] ?? [])] }));
+  function done() {
+    void reloadClaims();
     if (buyer) api.orders(buyer).then(setOrders).catch(() => undefined);
   }
 
@@ -35,6 +35,7 @@ export default function OrdersPage() {
     <RequireLogin user={user} ready={ready}>
       <PageTitle title="주문·배송" sub={`${buyer} 구매자의 주문입니다. 취소·반품·교환 신청은 고객지원 → 안전 → 재무로 이어집니다.`} right={<Link href="/support" className="btn-ghost text-sm">1:1 문의</Link>} />
       <ErrorNote error={error} />
+      <ClaimsLoadError failed={claimsFailed} onRetry={() => { void reloadClaims(); }} />
       {orders && orders.length === 0 && <Empty>주문 내역이 없습니다. <Link href="/products" className="font-semibold text-brand-600 underline">쇼핑하러 가기</Link></Empty>}
       <ul className="space-y-4">
         {(orders ?? []).map((o) => (
@@ -54,21 +55,14 @@ export default function OrdersPage() {
               배송비 {won(o.shipping_fee)} · 적립금 −{won(o.points_used)} · 결제 <b className="text-ink-900">{won(o.total_amount)}</b>
               {o.refunded_amount > 0 && <span className="ml-1 text-red-700">· 환불 {won(o.refunded_amount)}</span>}
             </p>
-            {(claims[o.order_id] ?? []).map((c) => (
-              <div key={c.id} className="mt-3">
-                <div className="mb-2 flex flex-wrap items-center gap-2">
-                  <AxClaimStatusBadge status={c.status} />
-                  <span className="text-sm font-semibold">{CLAIM_TYPE_KO[c.type]} · {CLAIM_REASON_KO[c.reason]}</span>
-                  <span className="text-xs text-ink-500">#{c.id} · {shortDateTime(c.created_at)}</span>
-                </div>
-                <AxClaimSummary c={c} />
-              </div>
+            {claims.filter((c) => c.order_id === o.order_id).map((c) => (
+              <div key={c.id} className="mt-3"><MyClaimCard c={c} /></div>
             ))}
           </li>
         ))}
       </ul>
-      {/* TODO(ax-backend#385): 신청 내역 조회(api.claims)가 생기면 새로고침 후에도 보이게 연결한다 */}
-      <div className="mt-6"><NotReady feature="신청 내역 조회·철회·사진 추가">{Object.values(claims).some((l) => l.length > 0) && <p className="mt-2 text-[11px]">방금 낸 신청만 표시됩니다. 새로고침하면 사라집니다.</p>}</NotReady></div>
+      {/* TODO(ax-backend#385): 신청 철회·사진 추가가 생기면 연결한다 */}
+      <div className="mt-6"><NotReady feature="신청 철회·사진 추가" /></div>
       {target && <AxClaimDialog order={target} onClose={() => setTarget(null)} onDone={done} />}
     </RequireLogin>
   );

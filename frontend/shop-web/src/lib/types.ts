@@ -30,12 +30,31 @@ export interface Order {
 export interface InquiryInput { buyer_id: string; order_id: string; subject?: string; body: string }
 export interface Inquiry { id: number | string; status: string; order_id: string; updated_at: string }
 
+// ---------------------------------------------------------------- ideas (고객의 소리)
+export type IdeaKind = "event" | "feature" | "improvement" | "product" | "other";
+export interface IdeaInput { buyer_id: string; kind: IdeaKind; text: string }
+export interface IdeaReceipt { idea_id: number; received: boolean }
+/** pending: 고객지원이 아직 안 읽음 · received: 받음 · redirected: 문의로 남겨야 함 · not_accepted: 받지 않음 */
+export type IdeaStatus = "pending" | "received" | "redirected" | "not_accepted";
+export interface MyIdea { idea_id: number; kind: IdeaKind; preview: string; status: IdeaStatus; notice: string | null; created_at: string }
+
 export interface OrderLineInput { product_id: string; qty: number }
 
 // ---------------------------------------------------------------- claims
 export type ClaimType = "cancel" | "return" | "exchange";
 export type ClaimReason = "change_of_mind" | "defect" | "wrong_item" | "damaged" | "missing_item" | "late_delivery" | "other";
-export type ClaimStatus = "needs_info" | "needs_review" | "awaiting_return" | "return_received" | "approved" | "completed" | "rejected";
+// received: 판매 서버에 접수만 됨(고객지원이 아직 읽지 않았거나 판정 전), not_accepted: 클레임으로 받지 않음
+export type ClaimStatus = "received" | "needs_info" | "needs_review" | "awaiting_return" | "return_received" | "approved" | "completed" | "rejected" | "not_accepted";
+
+/** 신청 직후 돌려받는 접수증. 판정·환불액은 없다(AXcellent가 읽어 간 뒤 결과가 적힌다). */
+export interface ClaimReceipt {
+  // context_id는 접수 응답의 meta에 있어 data에는 없을 수 있다
+  id: number; context_id?: string; status: ClaimStatus; order_id: string; type: ClaimType; reason: ClaimReason; created_at: string;
+}
+/** 내 신청: 접수증에 AXcellent가 적어 준 결과(없으면 null)가 붙는다. */
+export interface MyClaim extends ClaimReceipt {
+  updated_at: string; result: (Partial<Claim> & { message?: string }) | null;
+}
 
 export interface ClaimInput {
   buyer_id: string; customer_name: string; order_id: string; type: ClaimType; reason: ClaimReason;

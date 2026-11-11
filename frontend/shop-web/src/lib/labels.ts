@@ -1,3 +1,5 @@
+import type { IdeaKind, IdeaStatus } from "./types";
+
 export const CATEGORY_KO: Record<string, string> = {
   refund: "환불·반품", cancel: "주문 취소", delivery: "배송", defect: "불량·파손·오배송", payment: "결제",
   product: "상품", review: "후기", account: "적립금·계정", other: "기타",
@@ -7,6 +9,9 @@ export const URGENCY_KO: Record<string, string> = { low: "낮음", medium: "보�
 export const STYLE_KO: Record<string, string> = { empathetic: "공감형", concise: "간결형", step_by_step: "단계형" };
 export const STATUS_KO: Record<string, string> = { open: "진행 중", resolved: "해결", escalated: "이관" };
 export const URGENCY_DOT: Record<string, string> = { high: "bg-red-500", medium: "bg-amber-400", low: "bg-emerald-400" };
+
+export const IDEA_KIND_KO: Record<IdeaKind, string> = { event: "이벤트·혜택", feature: "새 기능", improvement: "개선", product: "상품", other: "기타" };
+export const IDEA_STATUS_KO: Record<IdeaStatus, string> = { pending: "접수됨", received: "전달됨", redirected: "1:1 문의로 남겨 주세요", not_accepted: "받지 못함" };
 
 export const CLAIM_TYPE_KO: Record<string, string> = { cancel: "주문 취소", return: "반품", exchange: "교환", compensation: "보상" };
 export const CLAIM_REASON_KO: Record<string, string> = {
