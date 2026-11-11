@@ -1,0 +1,16 @@
+{
+  "name": "catbooks-demo-frontend",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "shop-web"
+  ],
+  "engines": {
+    "node": ">=22.23.4"
+  },
+  "scripts": {
+    "dev:shop": "npm run dev -w shop-web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present"
+  }
+}
