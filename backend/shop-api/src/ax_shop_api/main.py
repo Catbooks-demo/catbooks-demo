@@ -3,6 +3,8 @@
 경로는 `/api/shop/<복수 명사>`, 성공은 `{data, meta}`, 실패는 `{error: {code, message}}`다.
 PR 1: 상품·주문·가짜 결제·시드·이벤트 발행. PR 2: 장애 주입·해제와 `shop.degraded` 측정.
 관리 API(`/api/shop/admin/*`)는 `Authorization: Bearer <토큰>`의 요청자가 허용 목록에 있어야 한다.
+토큰은 판매 서버가 발급한 연결 키(`SHOP_CLIENT_KEYS`)다. 전환 기간에는 AXcellent 에이전트 토큰도
+받는다(`SHOP_AGENT_TOKENS=off`면 끈다).
 사람 로그인(JWT)은 아직 없어서 관리자는 토큰 이름 `admin`으로 대신한다(TODO).
 """
 
@@ -15,6 +17,7 @@ import json
 import logging
 import os
 from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -333,6 +336,59 @@ VIEWER_TOKEN_ENV = "SHOP_VIEWER_TOKEN"
 VIEWER_TOKEN_MIN_LENGTH = 24  # 짧은 값은 켜지 않는다
 
 
+# 판매 서버가 발급한 연결 키. AXcellent 설치·서비스마다 하나씩 준다.
+#   SHOP_CLIENT_KEYS="<설치>/<서비스>:<키>:<read|write>,..."
+#   예: ax-251/inquiry:<키>:write, ax-251/claims:<키>:write, ax-local/inquiry:<키>:read
+# 서비스 이름이 요청자가 되어 아래 허용 목록을 그대로 탄다(서비스는 원래 부서 이름으로도 인정).
+# `read` 키는 GET·HEAD만 된다. 로컬처럼 읽기만 하는 설치(관찰 모드)가 판매 서버 상태를 못 바꾼다.
+# 쓰기(읽음 표시, 클레임 결과, 환불, 쿠폰·배너, 장애 해제 등)는 주 담당 설치의 `write` 키만 한다.
+CLIENT_KEYS_ENV = "SHOP_CLIENT_KEYS"
+CLIENT_KEY_MIN_LENGTH = 24  # 짧은 키는 켜지 않는다
+CLIENT_KEY_MODES = frozenset({"read", "write"})
+# AXcellent 에이전트 토큰(`AX_AGENT_TOKENS`)을 받을지. 연결 키로 다 옮긴 뒤 off로 끈다
+AGENT_TOKENS_ENV = "SHOP_AGENT_TOKENS"
+READ_METHODS = frozenset({"GET", "HEAD"})
+
+
+@dataclass(frozen=True)
+class ClientKey:
+    install: str
+    service: str
+    mode: str
+
+
+def client_keys() -> dict[str, ClientKey]:
+    """키 → (설치, 서비스, 권한). 형식이 틀리거나 짧은 항목은 버린다.
+
+    키 값은 로그에 남기지 않는다.
+    """
+    keys: dict[str, ClientKey] = {}
+    for item in os.getenv(CLIENT_KEYS_ENV, "").split(","):
+        parts = item.strip().split(":")
+        if len(parts) != 3:
+            continue
+        who, key, mode = (p.strip() for p in parts)
+        install, sep, service = who.partition("/")
+        if not (sep and install and service) or mode not in CLIENT_KEY_MODES:
+            continue
+        if len(key) < CLIENT_KEY_MIN_LENGTH:
+            continue
+        keys[key] = ClientKey(install, service, mode)
+    return keys
+
+
+def _client_key(token: str) -> ClientKey | None:
+    found = None
+    for key, client in client_keys().items():
+        if hmac.compare_digest(key.encode(), token.encode()):
+            found = client
+    return found
+
+
+def _agent_tokens_on() -> bool:
+    return (os.getenv(AGENT_TOKENS_ENV) or "on").strip().lower() != "off"
+
+
 def _is_human_token(token: str) -> bool:
     """사람 토큰(`SAFETY_HUMAN_TOKENS="이름:토큰,..."`)인가. 관리 API에는 쓸 수 없다(403)."""
     for item in os.getenv("SAFETY_HUMAN_TOKENS", "").split(","):
@@ -349,7 +405,7 @@ def _is_viewer_token(token: str) -> bool:
 
 
 def _caller(allowed: set[str]) -> Callable[..., str]:
-    def dependency(authorization: str | None = Header(default=None)) -> str:
+    def dependency(request: Request, authorization: str | None = Header(default=None)) -> str:
         scheme, _, token = (authorization or "").partition(" ")
         if scheme.lower() != "bearer" or not token.strip():
             raise ShopError("UNAUTHORIZED", "토큰이 필요하다", 401)
@@ -357,12 +413,20 @@ def _caller(allowed: set[str]) -> Callable[..., str]:
             if "viewer" not in allowed:
                 raise ShopError("FORBIDDEN", "읽기 전용 토큰으로는 호출할 수 없는 API다", 403)
             return "viewer"
-        try:
-            requester = verify_token(token.strip())  # 요청자는 토큰에서 꺼낸다
-        except PermissionError as error:
-            if _is_human_token(token.strip()):
-                raise ShopError("FORBIDDEN", "에이전트 토큰이 필요하다", 403) from error
-            raise ShopError("UNAUTHORIZED", "토큰을 검증할 수 없다", 401) from error
+        client = _client_key(token.strip())
+        if client is not None:
+            if client.mode == "read" and request.method not in READ_METHODS:
+                raise ShopError("READ_ONLY_KEY", "읽기 전용 연결 키로는 바꿀 수 없다", 403)
+            requester = client.service
+        elif not _agent_tokens_on():
+            raise ShopError("UNAUTHORIZED", "연결 키를 검증할 수 없다", 401)
+        else:
+            try:
+                requester = verify_token(token.strip())  # 요청자는 토큰에서 꺼낸다
+            except PermissionError as error:
+                if _is_human_token(token.strip()):
+                    raise ShopError("FORBIDDEN", "에이전트 토큰이 필요하다", 403) from error
+                raise ShopError("UNAUTHORIZED", "토큰을 검증할 수 없다", 401) from error
         # 서비스로 나뉜 에이전트(claims 등)는 원래 부서 이름(support)으로도 인정한다
         if requester not in allowed and department_of(requester) not in allowed:
             raise ShopError("FORBIDDEN", "이 API를 호출할 수 없는 요청자다", 403)

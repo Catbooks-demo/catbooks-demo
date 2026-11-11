@@ -36,6 +36,22 @@ npm run dev:shop     # http://localhost:3000
 
 장애 넣기: `SHOP_ADMIN_TOKEN=<관리자 토큰> bash backend/scripts/shop_fault.sh failure` (해제는 `clear`).
 
+## 연결 키 (AXcellent가 판매 서버를 부를 때)
+
+판매 서버가 AXcellent 설치·서비스마다 연결 키를 발급한다. AXcellent는 `Authorization: Bearer <키>`로 부른다.
+
+```
+SHOP_CLIENT_KEYS="<설치>/<서비스>:<키>:<read|write>,..."
+# 예: ax-251/inquiry:<키>:write,ax-251/claims:<키>:write,ax-local/inquiry:<키>:read
+```
+
+- 서비스 이름은 AXcellent 서비스 이름(`inquiry`·`claims`·`reviews`·`marketing`·`infra`·`data`·`finance`·`orchestrator`)이다.
+  API별 허용 목록은 부서 이름으로 되어 있고, 서비스는 원래 부서로도 인정한다(`inquiry` → `support`).
+- `write`는 주 담당 설치(251) 한 곳만 준다. 다른 설치(로컬 등)는 `read`로 준다. `read` 키는 GET·HEAD만 된다.
+- 키는 24자 이상. 만들기: `python -c "import secrets; print('sk_' + secrets.token_urlsafe(32))"`.
+  `.env`에만 두고 채팅·PR에 올리지 않는다.
+- 전환 기간에는 AXcellent 에이전트 토큰도 받는다. 모두 연결 키로 옮기면 `SHOP_AGENT_TOKENS=off`로 끈다.
+
 ## AXcellent로 이벤트 보내기
 
 판매 서버 이벤트(주문·결제·반품·장애 `shop.degraded`/`shop.recovered` 등)는 outbox에 저장한 뒤 AXcellent의
