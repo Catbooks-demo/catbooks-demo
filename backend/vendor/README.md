@@ -1,6 +1,6 @@
 # vendor
 
-AXcellent 공통 패키지 사본이다. Axcellent-bs dev `56916ddd`의 `backend/shared/contracts`(→ `ax-contracts`)와
+AXcellent 공통 패키지 사본이다. Axcellent-bs dev `10859e2e`의 `backend/shared/contracts`(→ `ax-contracts`)와
 `backend/shared/agent-template`(→ `ax-agent-template`)에서 `src/`·`pyproject.toml`·`README.md`만 복사했다.
 
 shop-api가 아직 이 두 패키지를 import해서(이벤트 봉투·스키마, A2A 호출, 이벤트 발행) 임시로 둔다.
