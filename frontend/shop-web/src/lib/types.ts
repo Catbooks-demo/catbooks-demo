@@ -6,6 +6,9 @@ export interface Product {
   product_id: string; seller_id: string; name: string; category_code: string; price: number; stock: number; active: boolean;
 }
 
+/** `GET /api/shop/sellers`. `name`은 판매자 표시 이름. */
+export interface Seller { seller_id: string; name: string; category_codes: string[] }
+
 export interface OrderItem {
   order_item_id: string; product_id: string; seller_id: string; title: string; qty: number; unit_price: number; points_share: number; paid_amount: number;
 }
