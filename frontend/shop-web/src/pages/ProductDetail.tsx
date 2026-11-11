@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import { useCart } from "@/lib/cart";
 import { hueOf } from "@/lib/format";
 import { useCategories } from "@/lib/categories";
+import { useSellers } from "@/lib/sellers";
 import type { Product } from "@/lib/types";
 
 export default function ProductPage() {
@@ -14,6 +15,7 @@ export default function ProductPage() {
   const router = useRouter();
   const cart = useCart();
   const { label: categoryLabel } = useCategories();
+  const { label: sellerLabel } = useSellers();
   const [p, setP] = useState<Product | null>(null);
   const [qty, setQty] = useState(1);
   const [error, setError] = useState<string | null>(null);
@@ -40,7 +42,7 @@ export default function ProductPage() {
         <div>
           <p className="text-xs font-semibold text-brand-600">{categoryLabel(p.category_code)}</p>
           <h1 className="mt-1 break-keep text-2xl font-bold leading-snug">{p.name}</h1>
-          <p className="mt-1 text-sm text-ink-500">판매자 {p.seller_id} · 상품번호 {p.product_id}</p>
+          <p className="mt-1 text-sm text-ink-500">판매자 {sellerLabel(p.seller_id)} · 상품번호 {p.product_id}</p>
           <div className="mt-4 border-y border-ink-100 py-4">
             <Price amount={p.price} big />
             <p className="mt-1 text-xs text-ink-500">배송비·최종 결제 금액은 주문 시 판매 서버가 계산합니다.</p>
