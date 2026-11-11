@@ -1,5 +1,5 @@
 # uv workspace 루트 (가상 루트: 자체 패키지 없음)
-# shop-api: 판매 서버. vendor/: AXcellent 공통 패키지 사본 (Axcellent-bs dev 56916ddd, vendor/README.md)
+# shop-api: 판매 서버. vendor/: AXcellent 공통 패키지 사본 (Axcellent-bs dev 10859e2e, vendor/README.md)
 [tool.uv.workspace]
 members = ["shop-api", "vendor/*"]
 
