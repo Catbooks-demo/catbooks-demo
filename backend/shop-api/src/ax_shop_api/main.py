@@ -27,7 +27,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from ax_agent_template.config import set_agent_name
 from ax_agent_template.server import verify_token
@@ -53,7 +53,13 @@ from ax_shop_api.lookups import Lookups
 from ax_shop_api.promotions import Promotions
 from ax_shop_api.refunds import Refunds
 from ax_shop_api.seed import seed
-from ax_shop_api.service import ORDER_PAGE_DEFAULT, ORDER_PAGE_MAX, Shop, ShopError
+from ax_shop_api.service import (
+    BAD_PAYMENT_VERSION,
+    ORDER_PAGE_DEFAULT,
+    ORDER_PAGE_MAX,
+    Shop,
+    ShopError,
+)
 from ax_shop_api.storefront import Storefront
 
 
@@ -147,9 +153,28 @@ class CancelIn(BaseModel):
     reason_code: Literal["buyer", "seller", "system"] = "buyer"
 
 
+PG_SLOW_MAX_MS = 10_000  # 결제사 쪽 지연은 결제마다 실제로 기다리므로 상한을 둔다
+
+
+class PaymentVersionIn(BaseModel):
+    version: Literal["v1", "v2"]  # PAYMENT_VERSIONS
+
+
+class PaymentRollbackIn(BaseModel):
+    to_version: Literal["v1", "v2"]
+
+
 class FaultIn(BaseModel):
-    kind: Literal["latency", "failure"]
-    delay_ms: int = Field(default=2000, ge=0, le=60000)  # kind=latency일 때 더할 지연
+    # lost_response: 결제사는 승인했는데 응답이 끊김(시간 초과 → 다시 확인하면 승인으로 나온다)
+    # pg_slow: 결제사 쪽 지연(시험용). 장애 스위치가 아니라 AI가 끌 수 없다(`DELETE .../faults/pg`)
+    kind: Literal["latency", "failure", "lost_response", "pg_slow"]
+    delay_ms: int = Field(default=2000, ge=0, le=60000)  # latency·pg_slow일 때 더할 지연
+
+    @model_validator(mode="after")
+    def _pg_slow_limit(self) -> FaultIn:
+        if self.kind == "pg_slow" and not 0 < self.delay_ms <= PG_SLOW_MAX_MS:
+            raise ValueError(f"pg_slow 지연은 1~{PG_SLOW_MAX_MS}ms")
+        return self
 
 
 class BannerIn(BaseModel):
@@ -313,6 +338,10 @@ INJECT_ALLOWED = {"admin"}
 # 상품 등록·수정(재고 보충 포함)은 운영자(admin)만
 PRODUCT_WRITERS = {"admin"}
 RELEASE_ALLOWED = {"admin", "infra"}
+# 결제 설정 버전(잘못된 배포 시연): 배포(아무 버전으로)는 사람만, 이전 버전으로 되돌리기만 인프라
+# 롤백(관문을 거친 rollback_deployment)도 부른다. 인프라 토큰은 되돌리기 경로 하나만 통한다
+PAYMENT_VERSION_DEPLOYERS = {"admin"}
+PAYMENT_VERSION_ROLLBACK = {"admin", "infra"}
 # 공지·쿠폰 쓰기는 마케팅 관문 토큰만, 쿠폰 조회는 사후 검증·중복 확인을 하는 부서와
 # 캠페인 성과를 세는 data(읽기 전용)까지
 MARKETING_ONLY = {"marketing"}
@@ -475,11 +504,23 @@ def create_app(
     storefront = Storefront(database)
     interval = float(os.getenv("SHOP_MONITOR_INTERVAL_S") or 5)  # 0이면 주기 판정을 끈다
 
+    recheck_every = float(os.getenv("SHOP_PAYMENT_RECHECK_S") or 30)  # 시간 초과 다시 확인 간격
+    last_recheck = [0.0]
+
     async def _monitor_loop() -> None:
         """결제 요청이 없어도 지속 시간을 판정하도록 주기적으로 평가한다."""
         while True:
             await asyncio.sleep(interval)
             shop.evaluate_monitor()
+            now = asyncio.get_running_loop().time()
+            if recheck_every > 0 and now - last_recheck[0] >= recheck_every:
+                last_recheck[0] = now
+                try:
+                    await toss.recheck_timeouts(
+                        shop, toss_payments.client if toss_payments else None
+                    )
+                except Exception:  # 다시 확인이 실패해도 판정 루프는 계속 돈다
+                    logging.getLogger(__name__).exception("시간 초과 결제 다시 확인 실패")
             await outbox.drain(database)  # 쌓인 미발행은 여기서 묶음씩 비운다
 
     @contextlib.asynccontextmanager
@@ -642,7 +683,8 @@ def create_app(
 
     @app.post("/api/shop/orders/{order_id}/payments")
     async def pay(order_id: str, body: PaymentIn) -> dict:
-        order = shop.pay(order_id, body.method_code, body.simulate)
+        waited = await shop.gateway.pg_wait()  # 결제사 쪽 지연(시험용)을 실제로 기다린다
+        order = shop.pay(order_id, body.method_code, body.simulate, pg_wait_ms=waited)
         shop.evaluate_monitor()
         await outbox.flush(database)
         return _ok(order)
@@ -690,9 +732,53 @@ def create_app(
     async def inject_fault(body: FaultIn, _: str = Depends(_caller(INJECT_ALLOWED))) -> dict:
         return _ok(shop.inject_fault(body.kind, body.delay_ms))
 
+    @app.get("/api/shop/admin/payments/timeouts")
+    async def timeout_payments(_: str = Depends(_caller(RELEASE_ALLOWED))) -> dict:
+        """시간 초과(승인됐는지 모름) 결제. 다시 확인을 기다리는 돈이다."""
+        rows = shop.timeout_payments()
+        keep = ("payment_id", "order_id", "amount", "provider", "failure_detail", "created_at")
+        return _ok([{k: r.get(k) for k in keep} for r in rows])
+
+    @app.post("/api/shop/admin/payments/recheck")
+    async def recheck_payments(_: str = Depends(_caller(RELEASE_ALLOWED))) -> dict:
+        """시간 초과 결제를 결제사에 지금 다시 확인한다(기록만 바로잡고 돈은 옮기지 않는다)."""
+        done = await toss.recheck_timeouts(shop, toss_payments.client if toss_payments else None)
+        await outbox.flush(database)
+        return _ok({"resolved": done, "left": len(shop.timeout_payments())})
+
     @app.delete("/api/shop/admin/faults")
     async def release_fault(caller: str = Depends(_caller(RELEASE_ALLOWED))) -> dict:
-        state = shop.release_fault(released_by=caller)  # 복구 신호에 누가 풀었는지 싣는다
+        # 해제한 쪽은 지표로 복구를 확인한 뒤 나가는 복구 신호에 싣는다
+        state = shop.release_fault(released_by=caller)
+        await outbox.flush(database)
+        return _ok(state)
+
+    @app.get("/api/shop/admin/payment-version")
+    async def payment_version(_: str = Depends(_caller(FAULT_STATE_READERS))) -> dict:
+        return _ok(shop.payment_version())
+
+    @app.put("/api/shop/admin/payment-version")
+    async def deploy_payment_version(
+        body: PaymentVersionIn, caller: str = Depends(_caller(PAYMENT_VERSION_DEPLOYERS))
+    ) -> dict:
+        """결제 설정 버전 배포(사람만, `demo_deploy.sh --bad`·`--reset`). v2는 잘못된 배포다."""
+        if body.version == BAD_PAYMENT_VERSION and payment_config.live_key:
+            raise ShopError(
+                "LIVE_KEY", "라이브 결제 키가 있으면 잘못된 배포(v2)를 하지 않는다", 409
+            )
+        return _ok(shop.set_payment_version(body.version, caller))
+
+    @app.post("/api/shop/admin/payment-version/rollback")
+    async def rollback_payment_version(
+        body: PaymentRollbackIn, caller: str = Depends(_caller(PAYMENT_VERSION_ROLLBACK))
+    ) -> dict:
+        """결제 설정을 이전 버전으로 되돌린다(인프라 AI 롤백). 앞으로 바꾸는 것은 거절한다."""
+        return _ok(shop.rollback_payment_version(body.to_version, caller))
+
+    @app.delete("/api/shop/admin/faults/pg")
+    async def pg_ok(_: str = Depends(_caller(INJECT_ALLOWED))) -> dict:
+        """결제사 쪽 지연(시험용)을 끈다. 사람(admin)만. 인프라 AI의 해제로는 꺼지지 않는다."""
+        state = shop.pg_ok()
         await outbox.flush(database)
         return _ok(state)
 
@@ -726,6 +812,18 @@ def create_app(
         proposal_id: str, _: str = Depends(_caller(ORCHESTRATOR_VIEWERS))
     ) -> dict:
         return _ok(await marketing_client.get_brief(proposal_id))
+
+    @app.get("/api/shop/admin/marketing/outage-sns-drafts")
+    async def marketing_outage_sns_drafts(
+        limit: int = 20,
+        include_merged: bool = False,
+        _: str = Depends(_caller(ORCHESTRATOR_VIEWERS)),
+    ) -> dict:
+        """장애 사과·보상 SNS 글 초안 읽기 중계. 초안만 보여 주고 게시하지 않는다.
+
+        `include_merged`(기본 false): 유사 초안 병합으로 접힌 원본(감사 기록)까지 본다.
+        """
+        return _ok(await marketing_client.list_outage_sns_drafts(limit, include_merged))
 
     # --- 공지 배너(SHOP-08): 고객 화면이 읽고, 마케팅 관문 토큰만 게시·해제한다 ---------
     @app.get("/api/shop/banners")
