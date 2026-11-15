@@ -36,12 +36,19 @@ class ImpactAnalysisOutput(AxModel):
     failed_order_count: int = Field(ge=0)
     affected_customer_count: int = Field(ge=0)
     affected_customer_ids: list[str] = Field(default_factory=list)  # 가명 ID만
-    damage_amount: int = Field(ge=0)  # 정수 원
+    damage_amount: int = Field(ge=0)  # 정수 원 (결제 실패 주문 금액 합, 이름은 호환을 위해 그대로)
+    # 결제 실패(미결제) 금액 (11/13). 고객 돈이 나가지 않은 받지 못한 매출이다. 지금은
+    # `damage_amount`와 같은 값이고, 실제 손실·환불할 돈이 아니라는 뜻을 이름으로 드러낸다.
+    # 예전 응답에는 없다
+    unpaid_amount: int | None = Field(default=None, ge=0)
     by_category: list[CategoryImpact] = Field(default_factory=list)
     summary: str
     # 평소보다 더 실패한 건수: 구간 장애 쪽 실패 − 지난 7일 같은 시각 ±1시간의 평소 실패
     # (구간 길이만큼, 반올림, 0 미만이면 0). 지난 7일 자료가 없으면 None. 예전 응답에는 없다
     excess_failed_order_count: int | None = Field(default=None, ge=0)
+    # 데이터분석이 이 요청을 처리하기 시작한 시각. 부른 쪽이 대기(요청~시작)와
+    # 처리(시작~응답) 시간을 나눠 남기는 데 쓴다(재무 영향 분석 로그). 예전 응답에는 없다
+    started_at: UtcDatetime | None = None
 
     @model_validator(mode="after")
     def _customer_count_matches_ids(self) -> Self:
@@ -280,6 +287,9 @@ class RootCauseOutput(AxModel):
     needs_confirmation: bool  # 확신도 high 후보가 없으면 true (사람이 원인을 확인)
     facts: list[CauseFact] = Field(default_factory=list)
     summary: str  # 사실이 하나도 없으면 "확인할 수 없음 …"
+    # 후보를 고른 방법: `llm`(LLM이 사실로 고름) · `rule`(시간 순서 규칙. 규칙만으로는 high를 주지
+    # 않는다) · 후보가 없으면 None. 예전 결과는 없다
+    method: Literal["llm", "rule"] | None = None
 
     @model_validator(mode="after")
     def _hypotheses_cite_facts(self) -> Self:
@@ -472,6 +482,9 @@ class CatalogImpact(AxModel):
     customer_label: str  # 영향받은 사람 (예: 고객, 거래처)
     money_field: str  # 피해 금액으로 더하는 칸
     money_unit: str = "원"
+    # 영향 금액을 부르는 말 (11/13). 캣북스는 "결제 실패(미결제) 금액"(받지 못한 매출, 실제 손실이
+    # 아님). 없으면 예전 문구 "피해 금액"
+    money_label: str = "피해 금액"
 
 
 class MetricCatalog(AxModel):

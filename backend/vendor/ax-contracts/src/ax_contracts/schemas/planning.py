@@ -22,6 +22,10 @@ class RelatedPr(AxModel):
     spec_id: str | None = None  # 근거 기획 문서
     para_id: str | None = None  # 요구사항·완료 기준 문단 id (R1, C2 …)
     changed_paths: list[str] = Field(default_factory=list)
+    # 형상관리 연결의 실제 레포에서 읽은 PR이면 채운다 (메모리 PR이면 None)
+    repo: str | None = None  # owner/name
+    connection_id: str | None = None  # 개발 서비스의 형상관리 연결 id
+    merge_sha: str | None = None
 
 
 class FindRelatedPrsInput(AxModel):
@@ -57,6 +61,27 @@ class VerifyRollbackTargetOutput(AxModel):
     approved: bool
     reason_code: Literal["deploy_before_incident", "no_deploy_in_window", "deploy_after_incident"]
     related_prs: list[RelatedPr] = Field(default_factory=list)
+
+
+# ---- revert_merged_pr: infra → dev, 등급 B (execute 경유)
+#
+# 형상관리 연결의 레포에서 병합된 PR을 되돌리는 PR을 열고 머지까지 간다.
+# CI를 기다려야 하면 자동 머지를 예약하고 auto_merge_scheduled로 돌려준다.
+# 관문이 사람 확인으로 보내면 held. 멱등 키는 connection_id + pr_number.
+
+
+class RevertMergedPrInput(AxModel):
+    connection_id: str
+    pr_number: int = Field(gt=0)
+    reason: str = Field(min_length=1)
+    incident_context_id: str | None = None
+
+
+class RevertMergedPrOutput(AxModel):
+    revert_pr_number: int | None = None  # 관문이 되돌리기 PR 열기부터 막으면(held) None
+    merged: bool
+    merge_sha: str | None = None
+    status: Literal["merged", "auto_merge_scheduled", "held"]
 
 
 # ---- hr 연동 (이슈 #10 이후, 인사 구성안 HR2 연동 ④·인수인계 검증)
@@ -204,6 +229,9 @@ class CreateTicketInput(AxModel):
     evidence: str  # 근거 요약 (예: 반복 문의 42건)
     source_ref: str | None = None  # 요청 부서 쪽 참조 ID (예: 고객지원 문의 ID). 판정에 안 쓴다
     evidence_ids: list[str] = Field(default_factory=list)  # 근거 ID
+    # True면 비슷한 요청이 있어도 묶지 않고 따로 받는다 (11/13). 사람이 화면에서 한 건씩 정해 보낸
+    # 요청(재무 개선 요청 등)이 남의 요청에 붙지 않게 한다. 비슷한 요청 표시(제안)는 그대로 한다
+    separate: bool = False
 
 
 class CreateTicketOutput(AxModel):
@@ -217,6 +245,29 @@ class CreateTicketOutput(AxModel):
         if (self.outcome == "linked_duplicate") != (self.duplicate_of is not None):
             raise ValueError("duplicate_of는 outcome이 linked_duplicate일 때만 채운다")
         return self
+
+
+# ---- 변경 요청 철회 (2026-11-13, 재무 요청)
+#
+# - `withdraw_ticket`: 요청 부서 → planning, 등급 A.
+# - 요청 부서가 자기가 보낸 요청(create_ticket)을 거둬들인다. planning은 그 요청을 목록에서 지운다.
+# - 보낸 부서와 `source_ref`가 맞아야 한다. 다른 부서 요청은 `not_yours`.
+# - 이미 개발로 넘어갔거나(작업·PR 있음) 다른 요청이 이 요청에 묶여 있으면 지우지 않는다
+#   (`in_progress`). 그때는 기획 화면에서 사람이 중단·기각한다.
+# - 없는 요청은 `not_found` (이미 지워졌으면 요청 부서는 자기 기록만 지우면 된다).
+
+
+class WithdrawTicketInput(AxModel):
+    request_id: str  # REQ-n (create_ticket이 돌려준 번호)
+    source_ref: str | None = None  # create_ticket에 보낸 요청 부서 참조 ID. 있으면 같아야 한다
+    reason: str = ""  # 철회 이유 (활동 기록에만 남긴다)
+
+
+class WithdrawTicketOutput(AxModel):
+    request_id: str
+    outcome: Literal["withdrawn", "not_found", "not_yours", "in_progress"]
+    message: str = ""
+    removed_spec: str | None = None  # 같이 지운 기획서 초안 ID
 
 
 # ---- 변경 요청 결과 통지 (이슈 #280 요청, planning)

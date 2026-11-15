@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import sqlite3
 import time
@@ -20,7 +21,7 @@ from typing import Any
 from ax_contracts.schemas import EventType, PaymentFailedData
 from ax_shop_api import outbox
 from ax_shop_api.db import TENANT_ID, Db
-from ax_shop_api.monitor import Monitor
+from ax_shop_api.monitor import FaultKind, Monitor
 
 CANCELLABLE = ("pending_payment", "payment_failed")
 
@@ -111,6 +112,15 @@ class PaymentOutcome:
     server_error: bool = False  # 카드 거절(PG_DECLINED)은 5xx가 아니다
     method_code: str | None = None  # 결제사가 알려 준 결제 수단(토스). 없으면 요청 값
     failure_detail: str | None = None  # 결제사 오류 코드 등(토스). 가짜 결제는 None
+    # 시간 초과: 결제사에 요청은 갔는데 응답이 끊겨(시간 초과·연결 오류) 승인됐는지 모른다.
+    # 실패로 적지 않고 `unknown`으로 남긴 뒤 결제사 조회로 다시 확인한다(돈이 빠져나갔을 수 있다)
+    timed_out: bool = False
+    # 가짜 결제사가 실제로 승인했는지(장애 주입 lost_response 시험용). 토스는 None(조회로 확인)
+    pg_approved: bool | None = None
+
+
+TIMEOUT_CODE = "PG_TIMEOUT"
+PAYMENT_TIMEOUT = "timeout"
 
 
 ATTEMPT_PREPARED, ATTEMPT_CONFIRMED, ATTEMPT_FAILED = "prepared", "confirmed", "failed"
@@ -136,6 +146,20 @@ PROMISED_DELIVERY_DAYS = 3
 
 BASELINE_LATENCY_MS = 180.0  # 평소 p95 기준(시연용)
 
+# 결제 설정 버전 (시연용 "잘못된 배포"). v1 정상, v2 잘못된 배포: 결제사 승인이 500대로 실패한다.
+# 장애 스위치(active)가 아니라 설정 버전이라 해제로는 안 풀리고, 이전 버전으로 되돌려야 풀린다.
+PAYMENT_VERSIONS = ("v1", "v2")  # 앞이 이전 버전
+GOOD_PAYMENT_VERSION, BAD_PAYMENT_VERSION = PAYMENT_VERSIONS
+# v2의 실패 코드. 토스 테스트 키면 승인 요청에 이 값을 `TossPayments-Test-Code`로 붙여 토스가 500을
+# 돌려주게 하고, 가짜 결제사면 같은 코드로 실패시킨다
+BAD_CONFIG_PG_CODE = "FAILED_INTERNAL_SYSTEM_PROCESSING"
+
+
+def _check_version(version: str) -> None:
+    if version not in PAYMENT_VERSIONS:
+        known = ", ".join(PAYMENT_VERSIONS)
+        raise ShopError("UNKNOWN_VERSION", f"결제 설정 버전은 {known}", 422)
+
 
 class Gateway:
     """가짜 결제 서버. 요청한 대로(`simulate`) 성공·실패를 돌려준다.
@@ -147,24 +171,58 @@ class Gateway:
     def __init__(self) -> None:
         self.delay_ms = 0
         self.failing = False
+        # 결제사는 승인했는데 우리 쪽 응답이 끊긴다(시간 초과). 다시 확인하면 승인으로 나온다
+        self.lost_response = False
+        # 결제사 쪽 지연 (시험용, `pg_slow`). 쇼핑몰 장애 스위치가 아니다: `active`·해제
+        # (`release`)에 들어가지 않아 AI(인프라 release_fault)가 끌 수 없고, 사람(admin)이
+        # `pg_ok`로만 끈다.
+        # "AI가 고치지 못하는 장애" 시연용. 결제마다 실제로 기다린다(`pg_wait`)
+        self.pg_delay_ms = 0
+        # 결제 설정 버전(`PAYMENT_VERSIONS`). 장애 스위치가 아니다(active·release에 안 들어간다)
+        self.config_version = GOOD_PAYMENT_VERSION
 
     def inject(self, kind: str, delay_ms: int = 0) -> None:
         if kind == "latency":
             self.delay_ms = delay_ms
         elif kind == "failure":
             self.failing = True
+        elif kind == "lost_response":
+            self.lost_response = True
+        elif kind == "pg_slow":
+            self.pg_delay_ms = delay_ms
+
+    def pg_ok(self) -> None:
+        self.pg_delay_ms = 0
+
+    async def pg_wait(self) -> float:
+        """결제사 쪽 지연이 켜져 있으면 실제로 기다리고, 기다린 ms를 돌려준다(없으면 0)."""
+        if not self.pg_delay_ms:
+            return 0.0
+        start = time.perf_counter()
+        await asyncio.sleep(self.pg_delay_ms / 1000)
+        return (time.perf_counter() - start) * 1000
 
     def release(self) -> None:
-        self.delay_ms, self.failing = 0, False
+        self.delay_ms, self.failing, self.lost_response = 0, False, False
 
     @property
     def active(self) -> bool:
-        return bool(self.delay_ms or self.failing)
+        return bool(self.delay_ms or self.failing or self.lost_response)
 
     def attempt(self, simulate: str | None) -> PaymentOutcome:
         latency = BASELINE_LATENCY_MS + self.delay_ms
         if self.failing:
             return PaymentOutcome(False, "PG_UNAVAILABLE", latency, server_error=True)
+        if self.config_version == BAD_PAYMENT_VERSION:  # 잘못된 배포: 결제사가 500으로 실패
+            return PaymentOutcome(
+                False, "PG_UNAVAILABLE", latency, server_error=True,
+                failure_detail=BAD_CONFIG_PG_CODE,
+            )  # fmt: skip
+        if self.lost_response and simulate != "failure":
+            return PaymentOutcome(
+                False, TIMEOUT_CODE, latency, server_error=True,
+                failure_detail="LOST_RESPONSE", timed_out=True, pg_approved=True,
+            )  # fmt: skip
         if simulate == "failure":
             return PaymentOutcome(False, "PG_DECLINED", latency)
         return PaymentOutcome(True, None, latency)
@@ -182,6 +240,11 @@ class Shop:
         self.gateway = gateway or Gateway()
         self.monitor = monitor or Monitor(db)
         self.clock = clock
+        self.last_release: dict[str, Any] | None = None
+        # 결제 설정 버전이 지금 값이 된 시각·바꾼 쪽 (켤 때는 v1, 바꾼 쪽 없음)
+        self.payment_version_since = _now()
+        self.payment_version_by: str | None = None
+        self.monitor.fault_kind = self._fault_kind  # shop.degraded에 켜져 있던 장애 종류를 싣는다
 
     # --- 조회 -------------------------------------------------------------
     def list_sellers(self) -> list[dict[str, Any]]:
@@ -619,6 +682,15 @@ class Shop:
             raise ShopError("ORDER_NOT_FOUND", "주문을 찾을 수 없다", 404)
         if order["status"] not in CANCELLABLE:  # pending_payment·payment_failed만 결제한다
             raise ShopError("ORDER_NOT_PAYABLE", "결제할 수 없는 주문 상태다", 409)
+        unknown = conn.execute(
+            "SELECT 1 FROM payments WHERE order_id = ? AND status = ?", (order_id, PAYMENT_TIMEOUT)
+        ).fetchone()
+        if unknown is not None:  # 앞 결제가 승인됐을 수 있다: 다시 결제하면 두 번 청구될 수 있다
+            raise ShopError(
+                "PAYMENT_TIMEOUT_CHECKING",
+                "앞 결제의 결과를 확인하는 중이다. 확인이 끝난 뒤 다시 결제한다",
+                409,
+            )
         return order
 
     def _record_payment(
@@ -637,14 +709,23 @@ class Shop:
         payment_id = self.db.next_id(conn, "payment", "pay_")
         now = _now()
         method = outcome.method_code or method_code
+        status = "succeeded" if outcome.ok else PAYMENT_TIMEOUT if outcome.timed_out else "failed"
         conn.execute(
             "INSERT INTO payments (payment_id, order_id, amount, method_code, status, "
             "failure_code, tenant_id, context_id, created_at, provider, pg_payment_key, "
             "failure_detail) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)",
-            (payment_id, order_id, amount, method, "succeeded" if outcome.ok else "failed",
+            (payment_id, order_id, amount, method, status,
              outcome.failure_code, TENANT_ID, now, provider, pg_payment_key,
              outcome.failure_detail),
         )  # fmt: skip
+        if outcome.pg_approved is not None:  # 가짜 결제사가 실제로 한 일(다시 확인할 때 본다)
+            conn.execute(
+                "INSERT INTO pg_fake_records (payment_id, approved, created_at) VALUES (?, ?, ?)",
+                (payment_id, int(outcome.pg_approved), now),
+            )
+        if outcome.timed_out:
+            # 시간 초과: 주문은 결제 대기로 두고 이벤트를 내지 않는다(다시 확인해 정해지면 낸다)
+            return payment_id
         conn.execute(
             "UPDATE orders SET status = ?, updated_at = ? WHERE order_id = ?",
             ("paid" if outcome.ok else "payment_failed", now, order_id),
@@ -679,10 +760,14 @@ class Shop:
             )
         return payment_id
 
-    def pay(self, order_id: str, method_code: str, simulate: str | None) -> dict[str, Any]:
+    def pay(
+        self, order_id: str, method_code: str, simulate: str | None, pg_wait_ms: float = 0.0
+    ) -> dict[str, Any]:
+        """`pg_wait_ms`: 결제사 쪽 지연으로 실제로 기다린 시간. 표본 지연에 그대로 더한다."""
         with self.db.tx() as conn:
             order = self._payable_order(conn, order_id)
             outcome = self.gateway.attempt(simulate)
+            outcome.latency_ms += pg_wait_ms
             self._record_payment(conn, order, outcome, method_code)
         return self.get_order(order_id)
 
@@ -759,8 +844,8 @@ class Shop:
                 conn.execute(
                     "UPDATE payment_attempts SET status = ?, payment_id = ?, updated_at = ? "
                     "WHERE toss_order_id = ?",
-                    (ATTEMPT_CONFIRMED if outcome.ok else ATTEMPT_FAILED, payment_id, _now(),
-                     start.toss_order_id),
+                    (ATTEMPT_CONFIRMED if outcome.ok else PAYMENT_TIMEOUT if outcome.timed_out
+                     else ATTEMPT_FAILED, payment_id, _now(), start.toss_order_id),
                 )  # fmt: skip
             return self._order(conn, start.order_id)
 
@@ -841,27 +926,185 @@ class Shop:
             )
         return self.get_order(order_id)
 
+    # --- 시간 초과 결제 다시 확인 ---------------------------------------------
+    def timeout_payments(self) -> list[dict[str, Any]]:
+        """시간 초과(`unknown`) 결제. 오래된 것부터. 토스 시도 번호와 가짜 결제사 기록을 붙인다."""
+        with self.db.tx() as conn:
+            rows = conn.execute(
+                "SELECT p.*, a.toss_order_id, f.approved AS fake_approved FROM payments p "
+                "LEFT JOIN payment_attempts a ON a.payment_id = p.payment_id "
+                "LEFT JOIN pg_fake_records f ON f.payment_id = p.payment_id "
+                "WHERE p.status = ? ORDER BY p.created_at",
+                (PAYMENT_TIMEOUT,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def resolve_payment(self, payment_id: str, approved: bool) -> dict[str, Any]:
+        """시간 초과 결제를 결제사 확인 결과로 정한다. 기록을 바로잡을 뿐 돈을 옮기지 않는다.
+
+        - 승인됨: 결제 `succeeded`, 주문 `paid`, `payment.succeeded`(실제로 청구된 돈)
+        - 승인 안 됨: 결제 `failed`(`PG_UNAVAILABLE`), 주문 `payment_failed`, `payment.failed`
+        이미 정해진 결제면 그대로 둔다(이벤트를 두 번 내지 않는다).
+        """
+        with self.db.tx() as conn:
+            pay = conn.execute(
+                "SELECT * FROM payments WHERE payment_id = ?", (payment_id,)
+            ).fetchone()
+            if pay is None:
+                raise ShopError("PAYMENT_NOT_FOUND", "결제를 찾을 수 없다", 404)
+            if pay["status"] != PAYMENT_TIMEOUT:
+                return {"payment_id": payment_id, "status": pay["status"], "changed": False}
+            now = _now()
+            order_id, amount = pay["order_id"], pay["amount"]
+            if approved:
+                conn.execute(
+                    "UPDATE payments SET status = 'succeeded', failure_code = NULL, "
+                    "resolved_at = ? WHERE payment_id = ?",
+                    (now, payment_id),
+                )
+                promised = datetime.now(UTC) + timedelta(days=PROMISED_DELIVERY_DAYS)
+                conn.execute(
+                    "UPDATE orders SET status = 'paid', updated_at = ?, promised_delivery_at = ? "
+                    "WHERE order_id = ? AND status IN ('pending_payment', 'payment_failed')",
+                    (now, promised.strftime("%Y-%m-%dT%H:%M:%SZ"), order_id),
+                )
+                data = {
+                    "payment_id": payment_id,
+                    "order_id": order_id,
+                    "amount": amount,
+                    "method_code": pay["method_code"],
+                }
+                outbox.enqueue(
+                    conn, EventType.PAYMENT_SUCCEEDED, data, f"payment.succeeded:{payment_id}"
+                )
+                status = "succeeded"
+            else:
+                conn.execute(
+                    "UPDATE payments SET status = 'failed', failure_code = 'PG_UNAVAILABLE', "
+                    "resolved_at = ? WHERE payment_id = ?",
+                    (now, payment_id),
+                )
+                conn.execute(
+                    "UPDATE orders SET status = 'payment_failed', updated_at = ? "
+                    "WHERE order_id = ? AND status = 'pending_payment'",
+                    (now, order_id),
+                )
+                failed = PaymentFailedData(
+                    payment_id=payment_id,
+                    order_id=order_id,
+                    amount=amount,
+                    failure_code="PG_UNAVAILABLE",
+                )
+                outbox.enqueue(
+                    conn,
+                    EventType.PAYMENT_FAILED,
+                    failed.model_dump(mode="json"),
+                    f"payment.failed:{payment_id}",
+                )
+                status = "failed"
+            conn.execute(
+                "UPDATE payment_attempts SET status = ?, updated_at = ? "
+                "WHERE payment_id = ? AND status = ?",
+                (ATTEMPT_CONFIRMED if approved else ATTEMPT_FAILED, now, payment_id,
+                 PAYMENT_TIMEOUT),
+            )  # fmt: skip
+        return {"payment_id": payment_id, "status": status, "changed": True}
+
+    def recheck_fake_timeouts(self) -> list[dict[str, Any]]:
+        """가짜 결제사 결제의 시간 초과을 가짜 결제사 기록으로 정한다(토스는 toss 모듈이 조회)."""
+        done = []
+        for row in self.timeout_payments():
+            if row["provider"] != "fake":
+                continue
+            done.append(self.resolve_payment(row["payment_id"], bool(row["fake_approved"])))
+        return done
+
     # --- 장애 주입·측정 (SHOP-06) -------------------------------------------
     def fault_state(self) -> dict[str, Any]:
         return {
             "active": self.gateway.active,
             "delay_ms": self.gateway.delay_ms,
             "failing": self.gateway.failing,
+            "lost_response": self.gateway.lost_response,
+            # 결제사 쪽 지연(시험용). 장애 스위치(active)가 아니라 따로 둔다. 0이면 꺼짐
+            "pg_delay_ms": self.gateway.pg_delay_ms,
+            # 결제 설정 버전(잘못된 배포 시연). 장애 스위치가 아니다
+            "payment_version": self.gateway.config_version,
             "degraded": self.monitor.degraded,
+            # 마지막으로 켜져 있던 스위치를 끈 기록 ({"released_by", "released_at"}). 없으면 None
+            "last_release": self.last_release,
         }
 
     def inject_fault(self, kind: str, delay_ms: int = 0) -> dict[str, Any]:
         self.gateway.inject(kind, delay_ms)
         return self.fault_state()
 
-    def release_fault(self, released_by: str | None = None) -> dict[str, Any]:
-        """장애를 해제한다. 장애 상태였다면 `shop.recovered`가 outbox에 들어간다.
-
-        복구 신호에는 해제로 풀렸다는 것(`recovery=fault_released`)과 해제한 쪽을 싣는다.
-        """
-        self.gateway.release()
-        self.monitor.reset(released_by=released_by)
+    def pg_ok(self) -> dict[str, Any]:
+        """결제사 쪽 지연을 끈다(사람만). 해제가 아니므로 표본·장애 상태는 그대로 두고, 정상
+        결제가 이어지면 모니터가 지표로 복구를 판정한다(`recovery=metrics_normal`)."""
+        self.gateway.pg_ok()
         return self.fault_state()
+
+    def _fault_kind(self) -> FaultKind | None:
+        """지금 켜져 있는 시험·시연 장애 종류. 여럿이면 스위치 → 결제사 지연 → 잘못된 배포 순."""
+        if self.gateway.active:
+            return "switch"
+        if self.gateway.pg_delay_ms:
+            return "pg_slow"
+        if self.gateway.config_version == BAD_PAYMENT_VERSION:
+            return "payment_version"
+        return None
+
+    # --- 결제 설정 버전 (시연용 "잘못된 배포") -------------------------------------
+    def payment_version(self) -> dict[str, Any]:
+        return {
+            "version": self.gateway.config_version,
+            "since": self.payment_version_since,
+            "changed_by": self.payment_version_by,
+            "versions": list(PAYMENT_VERSIONS),
+        }
+
+    def _set_version(self, version: str, by: str | None) -> None:
+        self.gateway.config_version = version
+        self.payment_version_since = _now()
+        self.payment_version_by = by
+
+    def set_payment_version(self, version: str, by: str | None) -> dict[str, Any]:
+        """결제 설정을 그 버전으로 배포한다(사람만). 같은 버전이면 바꾸지 않는다."""
+        _check_version(version)
+        before = self.gateway.config_version
+        if version != before:
+            self._set_version(version, by)
+        return {**self.payment_version(), "before": before, "changed": version != before}
+
+    def rollback_payment_version(self, to_version: str, by: str | None) -> dict[str, Any]:
+        """결제 설정을 이전 버전으로 되돌린다(인프라 AI 롤백·사람). 앞으로는 바꾸지 못한다.
+
+        이미 그 버전이면 바꾸지 않는다(`changed=false`). 응답의 `before`·`version`으로 되돌리기 전
+        ·후를 확인한다."""
+        _check_version(to_version)
+        before = self.gateway.config_version
+        if PAYMENT_VERSIONS.index(to_version) > PAYMENT_VERSIONS.index(before):
+            raise ShopError(
+                "NOT_A_ROLLBACK", f"{before}에서 {to_version}(으)로는 되돌리기가 아니다", 409
+            )
+        if to_version != before:
+            self._set_version(to_version, by)
+        return {**self.payment_version(), "before": before, "changed": to_version != before}
+
+    def release_fault(self, released_by: str | None = None) -> dict[str, Any]:
+        """장애 스위치를 끈다. 켜져 있던 스위치를 껐을 때만 "해제됨"을 남긴다.
+
+        해제는 복구가 아니다. 복구 신호(`shop.recovered`)는 모니터가 새 표본이 정상으로 이어지는
+        것을 확인한 뒤에 나간다. 응답의 `released`는 이번 호출이 켜져 있던 스위치를 껐는지다
+        (이미 꺼져 있었으면 False: 아무것도 바뀌지 않았다).
+        """
+        was_on = self.gateway.active
+        self.gateway.release()
+        if was_on:
+            self.monitor.released(released_by=released_by)
+            self.last_release = {"released_by": released_by, "released_at": _now()}
+        return {**self.fault_state(), "released": was_on}
 
     def evaluate_monitor(self) -> None:
         self.monitor.evaluate(self.clock())
