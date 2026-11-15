@@ -1,4 +1,4 @@
-"""서비스 14개와 에이전트의 대응표.
+"""서비스 15개와 에이전트의 대응표.
 
 AXcellent는 부서가 아니라 서비스 단위로 판다(고객사가 필요한 서비스만 고른다).
 그래서 에이전트도 서비스마다 하나씩 띄운다. 업무 로직은 원래 부서 패키지
@@ -38,6 +38,7 @@ SERVICES: tuple[Service, ...] = (
             "receive_finance_opinion",
             "orchestrator_chat_send",
             "orchestrator_chat_close",
+            "orchestrator_chat_remove",
             "orchestrator_chat_list",
             "orchestrator_chat_get",
         ),
@@ -78,6 +79,7 @@ SERVICES: tuple[Service, ...] = (
             "feedback_overview",
             "inquiry_overview",
             "detect_inquiry_surge",
+            "inquiry_order_counts",
             "propose_change_requests",
             "decline_change_proposal",
             "answer_planning_question",
@@ -94,6 +96,7 @@ SERVICES: tuple[Service, ...] = (
             "get_privacy_audit",
             "support_chat_send",
             "support_chat_close",
+            "support_chat_remove",
             "support_chat_list",
             "support_chat_get",
             # 문의 저장소를 읽는 skill은 문의를 가진 서비스에 둔다 (저장소가 프로세스마다 따로라서)
@@ -111,6 +114,7 @@ SERVICES: tuple[Service, ...] = (
             "list_claims",
             "get_claim",
             "claim_stats",
+            "book_issue_stats",
             "claim_queue",
             "create_claim",
             "decide_claim",
@@ -128,6 +132,23 @@ SERVICES: tuple[Service, ...] = (
         ),
         "클레임·보상",
     ),
+    # 판매자 정산 (2026-11-12 재무에서 옮김). 처음에는 claims 안에 있었는데, 주문 30만 건 장부를
+    # 읽고
+    # 계산하는 동안 같은 프로세스의 클레임 처리가 느려져 따로 띄운다. 화면은 클레임·보상 메뉴의
+    # `/settlements`이고, 켠 서비스 목록에서는 claims를 따른다(`ENABLED_WITH`)
+    Service(
+        "settlement",
+        "support",
+        8126,
+        (
+            "seller_settlement",
+            "seller_settlement_weeks",
+            "seller_settlement_batches",
+            "seller_settlement_deadlines",
+            "request_seller_settlement",
+        ),
+        "판매자 정산",
+    ),
     Service(
         "reviews", "support", 8122, ("customer_signals", "list_at_risk_customers"), "리뷰·지식"
     ),
@@ -144,18 +165,28 @@ SERVICES: tuple[Service, ...] = (
             "receive_campaign_brief",
             "list_campaign_briefs",
             "get_campaign_brief",
+            "handoff_brief_to_sns",
             "build_campaign_link",
             "marketing_chat_send",
             "marketing_chat_list",
             "marketing_chat_get",
             "marketing_chat_close",
+            "marketing_chat_remove",
             "issue_coupon",
             "start_campaign",
             "record_campaign_result",
             "draft_sns_post",
+            "draft_outage_sns_post",
+            "list_outage_sns_drafts",
+            "merge_outage_sns_drafts",
             "check_sns_post",
             "publish_sns",
             "generate_media",
+            "prepare_sns_post_from_media",
+            "prepare_brief_media",
+            "request_brief_publish",
+            "prepare_outage_sns_media",
+            "request_outage_sns_publish",
             "cancel_campaign",
         ),
         "공지·쿠폰",
@@ -167,6 +198,8 @@ SERVICES: tuple[Service, ...] = (
         (
             "closing_report",
             "record_support_cost",
+            # 인사가 확정한 팀 예산 기록 (11/13, 확정은 인사)
+            "record_team_budget",
             "answer_planning_question",
             "record_campaign_result",
             "review_campaign_budget",
@@ -176,6 +209,7 @@ SERVICES: tuple[Service, ...] = (
             "record_incident_finance",
             "finance_chat_send",
             "finance_chat_close",
+            "finance_chat_remove",
             "finance_chat_list",
             "finance_chat_get",
         ),
@@ -218,6 +252,7 @@ SERVICES: tuple[Service, ...] = (
             "data_chat_list",
             "data_chat_get",
             "data_chat_close",
+            "data_chat_remove",
         ),
         "데이터 분석",
     ),
@@ -256,6 +291,7 @@ SERVICES: tuple[Service, ...] = (
             "get_audit_timeline",
             "evaluate_agents",
             "decide_candidate_card",
+            "retire_request_cards",
             "answer_planning_question",
         ),
         "결정 기록",
@@ -269,6 +305,7 @@ SERVICES: tuple[Service, ...] = (
             "team_headcount",
             "record_org_change",
             "decide_org_change",
+            "confirm_team_budget",
             "list_org_changes",
             "set_org_roster_complete",
             "record_leave",
@@ -286,6 +323,8 @@ SERVICES: tuple[Service, ...] = (
         8101,
         (
             "create_ticket",
+            # 요청 부서가 자기 요청 거둬들이기 (재무 화면 "요청 빼기", 11/13)
+            "withdraw_ticket",
             "receive_dev_result",
             "receive_planning_answer",
             "request_release_check",
@@ -298,6 +337,7 @@ SERVICES: tuple[Service, ...] = (
             "planning_chat_list",
             "planning_chat_get",
             "planning_chat_close",
+            "planning_chat_remove",
         ),
         "요청·기획서",
     ),
@@ -309,6 +349,7 @@ SERVICES: tuple[Service, ...] = (
         (
             "find_related_prs",
             "link_incident",
+            "revert_merged_pr",
             "verify_rollback_target",
             "list_in_progress",
             "list_dev_outcomes",
@@ -321,6 +362,7 @@ SERVICES: tuple[Service, ...] = (
             "dev_chat_list",
             "dev_chat_get",
             "dev_chat_close",
+            "dev_chat_remove",
         ),
         "개발·배포",
     ),
@@ -339,6 +381,7 @@ SERVICES: tuple[Service, ...] = (
             "infra_chat_list",
             "infra_chat_get",
             "infra_chat_close",
+            "infra_chat_remove",
         ),
         "인프라 AI",
     ),
@@ -347,6 +390,10 @@ SERVICES: tuple[Service, ...] = (
 )
 
 BY_ID: dict[str, Service] = {s.id: s for s in SERVICES}
+# 화면 서비스 목록(`services.ts`)에 따로 없고 다른 서비스를 따라 켜지는 서비스 (서비스 id → 따르는
+# id).
+# 판매자 정산은 화면에서 클레임·보상 메뉴 안에 있다
+ENABLED_WITH: dict[str, str] = {"settlement": "claims"}
 SERVICE_PORTS: dict[str, int] = {s.id: s.port for s in SERVICES}
 
 # (부서, skill) → 서비스 id

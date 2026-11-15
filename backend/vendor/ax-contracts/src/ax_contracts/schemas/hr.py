@@ -33,6 +33,7 @@ skill과 등급(등급 신고는 안전 레이어 레지스트리가 원본이�
 | `parse_org_change_text` | 읽기 | 발령 문장을 입력 칸으로 정리하는 제안(LLM, 저장 안 함) |
 | `describe_org_change` | 읽기 | 발령 요약 설명문(숫자는 코드, 문장만 LLM) |
 | `set_org_roster_complete` | A | 인사 담당자가 "전 직원 등록 완료"를 표시 (요청자 dashboard-api) |
+| `confirm_team_budget` | A | 인사 담당자가 팀 예산 확정, 재무는 기록만 (dashboard-api) |
 | `team_headcount` | 읽기 | 그 달 1일 기준 팀별 인원수 (이름·직원 ID 없음, 요청자 finance 팀 예산) |
 | `record_leave` | A | 휴가 기간 기록(사유·종류 없음, 요청자 인사 서비스, 사람 토큰만) |
 | `cancel_leave` | A | 휴가 기록에 취소 표시(취소한 사람·시각)만 남김(지우지 않음), 사람 토큰만 |
@@ -411,6 +412,22 @@ class ListOrgChangesOutput(AxModel):
     collected_at: UtcDatetime
 
 
+class ConfirmTeamBudgetInput(AxModel):
+    """인사 담당자가 그 달 팀 예산을 확정한다. 재무는 `signature`가 지금과 같을 때만 기록한다."""
+
+    month: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    signature: str = Field(min_length=1, max_length=200)  # 재무 GET /api/finance/team-budget의 값
+    confirmed_by: str = Field(min_length=1, max_length=80)  # dashboard-api가 사람 토큰에서 채운다
+    note: str | None = Field(default=None, max_length=500)
+
+
+class ConfirmTeamBudgetOutput(AxModel):
+    month: str
+    status: Literal["recorded", "already_recorded"]
+    total: int
+    signature: str
+
+
 class SetOrgRosterCompleteInput(AxModel):
     """인사 담당자가 "전 직원 등록 완료"를 표시(`complete=True`)하거나 다시 연다(`False`)."""
 
@@ -552,6 +569,29 @@ class DecideCandidateCardInput(AxModel):
 class DecideCandidateCardOutput(AxModel):
     card_id: str
     status: Literal["active", "retired"]
+
+
+class RetireRequestCardsInput(AxModel):
+    """부서가 기획에 보낸 요청을 거둬들일 때, 그 요청에서 나온 카드를 내린다.
+
+    - `context_id`: 요청 사건 번호(`ctx_req_…`). 이 사건에서 나온 카드가 대상이다.
+    - `request_id`: 요청 번호(`REQ-n`). 근거 참조에 이 번호가 있는 카드도 대상이다.
+    - `spec_id`: 기획서 번호(있으면). 근거 참조에 `spec:<번호>`가 있는 카드도 대상이다.
+    - `reason`: 내리는 이유. 감사 기록에 남는다.
+    """
+
+    context_id: str = Field(min_length=1)
+    request_id: str = Field(min_length=1)
+    spec_id: str | None = None
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class RetireRequestCardsOutput(AxModel):
+    """내린 카드 목록. 카드는 지우지 않고 `retired`로 내려 내력을 남긴다."""
+
+    retired_card_ids: list[str] = Field(default_factory=list)
+    # 이미 내려가 있어 건드리지 않은 카드(다시 불러도 같은 결과가 나오게 한다)
+    already_retired_card_ids: list[str] = Field(default_factory=list)
 
 
 # ---- 대시보드 인사 화면용 조회 ------------------------------------------------------------
@@ -719,6 +759,12 @@ class StepTiming(AxModel):
     human_wait_seconds: float | None = Field(default=None, ge=0)
     attempts: int = Field(default=0, ge=0)
     reason_code: str | None = None
+    # 이 단계가 보통 걸리는 시간(기준 시간, 초). 총괄이 단계 정의에서 가져와 보낸다. 없으면 None이고
+    # 평가는 기본 기준(30초)으로 판정한다
+    promised_seconds: float | None = Field(default=None, gt=0)
+    # 긴 작업(비동기)에서 부서의 응답(접수·진행 알림·완료) 사이가 가장 길게 비었던 시간(초). 아직
+    # 진행 중이면 마지막 응답 이후 지금까지의 시간도 센다. 동기로 끝난 단계는 None
+    max_silence_seconds: float | None = Field(default=None, ge=0)
 
 
 class RecordEventTimesInput(EventTimeline):
@@ -905,6 +951,7 @@ AgentVerdict = Literal[
     "no_record",
     "blocked",
     "approval_expired",
+    "silent",  # 긴 작업 중 부서의 응답이 정해진 시간 넘게 끊김
     "in_progress",
     "absent",
     "handed_off",  # 스스로 끝내지 않고 사람이 보도록 넘김. 실패도 지연도 아니다
@@ -943,6 +990,7 @@ class AgentSummary(AxModel):
     blocked: int = Field(ge=0)
     handed_off: int = Field(default=0, ge=0)
     approval_expired: int = Field(ge=0)
+    silent: int = Field(default=0, ge=0)
     in_progress: int = Field(ge=0)
     retried: int = Field(ge=0)  # 확인 필요 중 다시 시도가 있었던 이벤트 수
     slow: int = Field(ge=0)  # 확인 필요 중 기준 시간을 넘긴 이벤트 수
@@ -963,6 +1011,9 @@ class EvaluatedStep(AxModel):
     human_wait_seconds: float | None = None
     attempts: int = Field(default=0, ge=0)
     limit_seconds: float
+    # 기준 시간(`limit_seconds`)이 단계별로 정한 값에서 왔는지(True), 기본값(30초)에서 왔는지(False)
+    promised: bool = False
+    max_silence_seconds: float | None = None
     reason: str | None = None
 
 
@@ -986,6 +1037,10 @@ class EvaluateAgentsOutput(AxModel):
     criteria_updated: str
     normal_max_seconds: float
     normal_max_attempts: int = Field(ge=1)
+    # 단계별 기준 시간을 쓰는지(기준값 v2부터)와, 응답이 이 시간(초)보다
+    # 길게 비면 끊김으로 보는 기준(v3부터)
+    use_promised: bool = False
+    max_silence_seconds: float = Field(default=300.0, gt=0)
     events: list[EvaluatedEvent] = Field(default_factory=list)  # 새로운 이벤트부터
     agents: list[AgentSummary] = Field(default_factory=list)
     trend: list[DailyTrend] = Field(default_factory=list)
