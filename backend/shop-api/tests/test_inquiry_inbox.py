@@ -52,9 +52,10 @@ def test_pending_inquiries_are_read_oldest_first_with_the_total(client: TestClie
     assert body["meta"]["failed"] == 0
     item = body["data"][0]
     assert set(item) == {
-        "seq", "key", "context_id", "buyer_id", "customer_name", "order_id",
+        "seq", "key", "context_id", "buyer_id", "age_band", "customer_name", "order_id",
         "subject", "message", "images", "attempts", "created_at",
     }  # fmt: skip
+    assert item["age_band"] is None  # 연령대 구간을 입력하기 전의 구매자는 모르는 것(None)
     assert item["key"] and item["attempts"] == 0  # 멱등 키로 쓰는 접수 지문
     assert item["buyer_id"] == "buy_0001" and item["context_id"].startswith("ctx_shop_")
 

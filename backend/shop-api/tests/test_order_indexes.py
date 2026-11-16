@@ -54,7 +54,10 @@ def test_indexes_are_added_to_an_existing_db_file(tmp_path: Path) -> None:
     path = str(tmp_path / "shop.db")
     first = Db(path)
     with first.tx() as conn:
-        conn.execute("INSERT INTO buyers VALUES ('buy_0001', 't', NULL, '2026-10-30')")
+        conn.execute(
+            "INSERT INTO buyers (buyer_id, tenant_id, context_id, created_at)"
+            " VALUES ('buy_0001', 't', NULL, '2026-10-30')"
+        )
         conn.execute(
             "INSERT INTO orders(order_id, buyer_id, status, total_amount, tenant_id, created_at,"
             " updated_at) VALUES ('ord_0001', 'buy_0001', 'paid', 12000, 't', 'x', 'x')"

@@ -16,6 +16,7 @@ import hashlib
 from datetime import UTC, datetime
 from typing import Any
 
+from ax_shop_api import intake_common
 from ax_shop_api.db import TENANT_ID, Db
 
 READ_LIMIT_DEFAULT = 20
@@ -61,6 +62,7 @@ def pending(db: Db, limit: int = READ_LIMIT_DEFAULT) -> tuple[list[dict[str, Any
         rows = conn.execute(
             "SELECT * FROM idea_inbox WHERE synced_at IS NULL ORDER BY seq LIMIT ?", (limit,)
         ).fetchall()
+        bands = intake_common.age_bands(conn, (r["buyer_id"] for r in rows))
         total = conn.execute(
             "SELECT COUNT(*) AS n FROM idea_inbox WHERE synced_at IS NULL"
         ).fetchone()["n"]
@@ -70,6 +72,7 @@ def pending(db: Db, limit: int = READ_LIMIT_DEFAULT) -> tuple[list[dict[str, Any
             "key": r["digest"],  # 고객지원이 멱등 키로 쓴다
             "context_id": r["context_id"],
             "buyer_id": r["buyer_id"],
+            "age_band": bands.get(r["buyer_id"]),  # 구매자 연령대 구간. 모르면 None
             "kind": r["kind"],
             "text": r["text"],
             "created_at": r["created_at"],

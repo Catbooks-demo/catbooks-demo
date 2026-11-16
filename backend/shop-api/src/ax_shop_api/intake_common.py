@@ -7,7 +7,8 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+import sqlite3
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -16,6 +17,28 @@ from ax_shop_api.db import Db
 MAX_ATTEMPTS_DEFAULT = 6
 BACKOFF_BASE_SECONDS = 60
 BACKOFF_MAX_SECONDS = 1800
+
+
+AGE_BAND_CHUNK = 500  # SQLite 변수 개수 한도 안에서 나눠 읽는다
+
+
+def age_bands(conn: sqlite3.Connection, buyer_ids: Iterable[str]) -> dict[str, str | None]:
+    """구매자 ID → 연령대 구간. 값이 없는 구매자는 None이다 (채워 넣지 않는다).
+
+    문의·클레임·아이디어를 읽어 가는 쪽(AXcellent 고객지원)이 연령대별로 세는 데 쓴다.
+    개인 단위 나이가 아니라 구간만 담는다.
+    """
+    ids = sorted(set(buyer_ids))
+    found: dict[str, str | None] = {}
+    for start in range(0, len(ids), AGE_BAND_CHUNK):
+        chunk = ids[start : start + AGE_BAND_CHUNK]
+        marks = ",".join("?" * len(chunk))
+        for row in conn.execute(
+            f"SELECT buyer_id, age_band FROM buyers WHERE buyer_id IN ({marks})",  # noqa: S608
+            chunk,
+        ):
+            found[row["buyer_id"]] = row["age_band"]
+    return found
 
 
 def stamp(moment: datetime) -> str:

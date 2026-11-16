@@ -127,6 +127,14 @@ class SessionIn(BaseModel):
     buyer_id: str  # 데모 사용자 선택. 비밀번호·토큰은 없다
 
 
+class ProfileIn(BaseModel):
+    """구매자 프로필. 연령대 구간만 받는다(생년월일·나이는 받지 않는다). null이면 지운다."""
+
+    model_config = {"extra": "forbid"}
+
+    age_band: Literal["10s", "20s", "30s", "40s", "50s_plus"] | None
+
+
 class ShippedIn(BaseModel):
     shipped_at: AwareDatetime | None = None  # 비우면 지금(시연·시드용으로 지난 시각도 가능)
 
@@ -577,6 +585,11 @@ def create_app(
     @app.get("/api/shop/users/{buyer_id}")
     async def get_user(buyer_id: str) -> dict:
         return _ok(storefront.get_user(buyer_id))
+
+    @app.patch("/api/shop/users/{buyer_id}")
+    async def update_profile(buyer_id: str, body: ProfileIn) -> dict:
+        """연령대 구간(`age_band`)을 정하거나(null이면 지운다). 비밀번호·토큰은 없다(데모)."""
+        return _ok(storefront.set_age_band(buyer_id, body.age_band))
 
     @app.post("/api/shop/sessions")
     async def select_user(body: SessionIn) -> dict:
