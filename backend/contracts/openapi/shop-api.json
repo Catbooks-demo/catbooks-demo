@@ -974,6 +974,17 @@
             "title": "Category Code",
             "type": "string"
           },
+          "genre_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Genre Code"
+          },
           "isbn13": {
             "anyOf": [
               {
@@ -1051,6 +1062,17 @@
               }
             ],
             "title": "Author"
+          },
+          "genre_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Genre Code"
           },
           "isbn13": {
             "anyOf": [
@@ -1269,6 +1291,17 @@
           "category_code": {
             "title": "Category Code",
             "type": "string"
+          },
+          "genre_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Genre Code"
           },
           "isbn13": {
             "anyOf": [

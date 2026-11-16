@@ -40,6 +40,7 @@ from ax_shop_api import (
     accounts,
     book_info,
     claim_inbox,
+    genres,
     idea_inbox,
     inbox,
     inquiries,
@@ -67,13 +68,19 @@ from ax_shop_api.storefront import Storefront
 
 
 class BookInfoIn(BaseModel):
-    """상품에 붙는 선택 책 정보. 비워 두면 모르는 것이다(값을 지어내지 않는다)."""
+    """상품에 붙는 선택 책 정보·장르. 비워 두면 모르는 것이다(값을 지어내지 않는다)."""
 
     isbn13: str | None = (
         None  # 하이픈은 뺀다. 13자리·978/979로 시작·확인 숫자가 맞아야 한다(아니면 422)
     )
     author: str | None = Field(default=None, max_length=book_info.AUTHOR_MAX)
     publisher: str | None = Field(default=None, max_length=book_info.PUBLISHER_MAX)
+    genre_code: str | None = None  # `genres.GENRES`의 코드 하나(아니면 422), 비우면 모름
+
+    @field_validator("genre_code", mode="before")
+    @classmethod
+    def _genre(cls, value: Any) -> Any:
+        return genres.normalize_genre(value) if isinstance(value, str) or value is None else value
 
     @field_validator("isbn13", mode="before")
     @classmethod
@@ -946,7 +953,7 @@ def create_app(
         product_id: str, body: ProductPatch, _: str = Depends(_caller(PRODUCT_WRITERS))
     ) -> dict:
         changes = body.model_dump(exclude_none=True)
-        for key in ("isbn13", "author", "publisher"):  # 보냈으면 null도 "지움"이다
+        for key in ("isbn13", "author", "publisher", "genre_code"):  # 보냈으면 null도 "지움"이다
             if key in body.model_fields_set:
                 changes[key] = getattr(body, key)
         return _ok(shop.update_product(product_id, changes))
