@@ -58,3 +58,12 @@ export const ORDER_STATUS_KO: Record<string, string> = {
 export const ORDER_STATUS_TONE: Record<string, string> = {
   pending_payment: "bg-amber-50 text-amber-700", payment_failed: "bg-red-50 text-red-700", paid: "bg-emerald-50 text-emerald-700", cancelled: "bg-ink-100 text-ink-500",
 };
+
+/** 주문 진행 표시: 결제 → 배송 중 → 배송 완료. 결제 전·취소는 서버 상태 그대로 쓴다. */
+export function orderStage(o: { status: string; shipped_at: string | null; delivered_at: string | null }): { label: string; tone: string } {
+  if (o.status === "paid") {
+    if (o.delivered_at) return { label: "배송 완료", tone: "bg-emerald-50 text-emerald-700" };
+    if (o.shipped_at) return { label: "배송 중", tone: "bg-sky-50 text-sky-700" };
+  }
+  return { label: ORDER_STATUS_KO[o.status] ?? o.status, tone: ORDER_STATUS_TONE[o.status] ?? "bg-ink-100 text-ink-700" };
+}

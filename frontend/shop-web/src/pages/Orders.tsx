@@ -6,13 +6,14 @@ import { Empty, ErrorNote, NotReady, PageTitle, RequireLogin } from "@/component
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { dateStr, won } from "@/lib/format";
-import { ORDER_STATUS_KO, ORDER_STATUS_TONE } from "@/lib/labels";
-import type { Order } from "@/lib/types";
+import { orderStage } from "@/lib/labels";
+import type { Order, Reviewable } from "@/lib/types";
 
 export default function OrdersPage() {
   const { user, ready } = useAuth();
   const [orders, setOrders] = useState<Order[] | null>(null);
   const [target, setTarget] = useState<Order | null>(null);
+  const [reviewable, setReviewable] = useState<Reviewable[]>([]);
   const [error, setError] = useState<string | null>(null);
   const buyer = user?.buyer_id;
   const { claims, failed: claimsFailed, reload: reloadClaims } = useMyClaims(buyer);
@@ -26,6 +27,11 @@ export default function OrdersPage() {
     return () => { live = false; };
   }, [buyer]);
 
+  useEffect(() => {
+    if (!buyer) return;
+    api.reviewable().then(setReviewable).catch(() => setReviewable([]));
+  }, [buyer]);
+
   function done() {
     void reloadClaims();
     if (buyer) api.orders(buyer).then(setOrders).catch(() => undefined);
@@ -33,7 +39,7 @@ export default function OrdersPage() {
 
   return (
     <RequireLogin user={user} ready={ready}>
-      <PageTitle title="주문·배송" sub={`${buyer} 구매자의 주문입니다. 취소·반품·교환 신청은 고객지원 → 안전 → 재무로 이어집니다.`} right={<Link href="/support" className="btn-ghost text-sm">1:1 문의</Link>} />
+      <PageTitle title="주문·배송 조회" sub="취소·반품·교환 신청은 고객지원 → 안전 → 재무로 이어져요." right={<Link href="/support" className="btn-ghost text-sm">1:1 문의</Link>} />
       <ErrorNote error={error} />
       <ClaimsLoadError failed={claimsFailed} onRetry={() => { void reloadClaims(); }} />
       {orders && orders.length === 0 && <Empty>주문 내역이 없습니다. <Link href="/products" className="font-semibold text-brand-600 underline">쇼핑하러 가기</Link></Empty>}
@@ -42,13 +48,13 @@ export default function OrdersPage() {
           <li key={o.order_id} className="rounded-xl border border-ink-100 bg-surface p-4">
             <div className="flex flex-wrap items-center gap-2">
               <Link href={`/orders/${o.order_id}`} className="font-mono text-sm font-semibold hover:underline">{o.order_id}</Link>
-              <span className={`chip ${ORDER_STATUS_TONE[o.status] ?? "bg-ink-100 text-ink-700"}`}>{ORDER_STATUS_KO[o.status] ?? o.status}</span>
+              <span className={`chip ${orderStage(o).tone}`}>{orderStage(o).label}</span>
               <span className="text-xs text-ink-500">{dateStr(o.created_at)} 주문{o.delivered_at && ` · ${dateStr(o.delivered_at)} 도착`}</span>
               {axClaimTypes(o).length > 0 && <button className="btn-ghost ml-auto py-1 text-xs" onClick={() => setTarget(o)}>{o.delivered_at ? "반품·교환 신청" : "취소 신청"}</button>}
             </div>
             <ul className="mt-3 space-y-1 text-sm">
               {o.items.map((i) => (
-                <li key={i.order_item_id} className="flex justify-between gap-2"><span className="min-w-0 truncate">{i.title} × {i.qty}</span><span className="tabular-nums text-ink-500">{won(i.paid_amount)}</span></li>
+                <li key={i.order_item_id} className="flex items-center justify-between gap-2"><span className="min-w-0 truncate">{i.title} × {i.qty}</span><span className="flex shrink-0 items-center gap-2"><span className="tabular-nums text-ink-500">{won(i.paid_amount)}</span>{reviewable.some((r) => r.order_id === o.order_id && r.product_id === i.product_id) && <Link href={`/products/${encodeURIComponent(i.product_id)}#reviews`} className="btn-ghost py-1 text-xs">후기 쓰기</Link>}</span></li>
               ))}
             </ul>
             <p className="mt-2 text-right text-xs text-ink-500">

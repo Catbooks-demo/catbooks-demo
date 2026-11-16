@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "@/lib/nav";
-import { Empty, ErrorNote, NotReady, PageTitle, RequireLogin } from "@/components/shop/bits";
+import { Empty, ErrorNote, PageTitle, RequireLogin } from "@/components/shop/bits";
 import { IdeaBox } from "@/components/shop/IdeaBox";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -109,7 +109,7 @@ export default function SupportPage() {
         {!loadError && orders === null && <p className="py-6 text-center text-sm text-ink-500">주문을 불러오는 중…</p>}
         {orders && orders.length === 0 && (
           <Empty>
-            문의할 주문이 없습니다. 1:1 문의는 주문을 선택해서 보내므로, <Link href="/orders" className="font-semibold text-brand-600 underline">주문·배송</Link>에서 주문을 확인해 주세요.
+            문의할 주문이 없습니다. 1:1 문의는 주문을 선택해서 보내므로, <Link href="/my/orders" className="font-semibold text-brand-600 underline">주문·배송</Link>에서 주문을 확인해 주세요.
           </Empty>
         )}
         {orders && orders.length > 0 && (
@@ -131,7 +131,7 @@ export default function SupportPage() {
             </label>
             {picked && (
               <div className="rounded-lg bg-ink-100 px-3 py-2 text-xs text-ink-700">
-                <p><Link href={`/orders/${encodeURIComponent(picked.order_id)}`} className="font-mono font-semibold underline">{picked.order_id}</Link> · {ORDER_STATUS_KO[picked.status] ?? picked.status} · {dateStr(picked.created_at)} 주문 · 결제 {won(picked.total_amount)}</p>
+                <p><Link href={`/my/orders/${encodeURIComponent(picked.order_id)}`} className="font-mono font-semibold underline">{picked.order_id}</Link> · {ORDER_STATUS_KO[picked.status] ?? picked.status} · {dateStr(picked.created_at)} 주문 · 결제 {won(picked.total_amount)}</p>
                 <p className="mt-1 truncate">{picked.items.map((i) => `${i.title} × ${i.qty}`).join(", ")}</p>
               </div>
             )}
@@ -149,9 +149,9 @@ export default function SupportPage() {
             <button type="submit" className="btn-primary" disabled={!canSend}>{sending ? "접수 중…" : "문의 보내기"}</button>
           </form>
         )}
-        <div className="mt-4"><NotReady feature="문의 내역 조회" /></div>
+        <p className="mt-4 text-sm text-ink-500">보낸 문의는 <Link href="/my/inquiries" className="font-semibold text-brand-600 underline">마이페이지 → 1:1 문의 내역</Link>에서 확인해요.</p>
         {buyer && <IdeaBox key={buyer} buyerId={buyer} />}
-        <p className="mt-4 text-sm text-ink-500">주문과 관련한 신청은 <Link href="/orders" className="font-semibold text-brand-600 underline">주문·배송</Link>에서 하세요.</p>
+        <p className="mt-4 text-sm text-ink-500">주문과 관련한 신청은 <Link href="/my/orders" className="font-semibold text-brand-600 underline">주문·배송</Link>에서 하세요.</p>
       </RequireLogin>
     </div>
   );

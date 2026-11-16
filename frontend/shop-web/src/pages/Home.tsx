@@ -58,7 +58,7 @@ export default function Home() {
             <li className="flex gap-3"><span className="text-brand-600"><IconRefresh /></span><span><b>고객지원이 환불액을 계산</b><br /><span className="text-xs text-ink-500">신청하면 고객지원이 주문 사실로 금액을 정해요 (신청 전 미리보기는 준비 중)</span></span></li>
             <li className="flex gap-3"><span className="text-brand-600"><IconBox /></span><span><b>반품 입고 순서대로 처리</b><br /><span className="text-xs text-ink-500">검수가 끝난 순서대로 환불·보상이 지급돼요</span></span></li>
           </ul>
-          <Link href={user ? "/orders" : "/login"} className="btn-primary mt-4 w-full">{user ? "내 주문 보기" : "로그인"}</Link>
+          <Link href={user ? "/my" : "/login"} className="btn-primary mt-4 w-full">{user ? "마이페이지" : "로그인"}</Link>
         </aside>
       </section>
 

@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "@/lib/nav";
 import { ErrorNote, NotReady, PageTitle } from "@/components/shop/bits";
-import AgeBandPicker from "@/components/shop/AgeBandPicker";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { DemoUser } from "@/lib/types";
@@ -29,7 +28,7 @@ export default function DevBuyersPage() {
     setError(null);
     try {
       await demoLogin(id);
-      router.push("/orders");
+      router.push("/my/orders");
     } catch (e) {
       setError((e as Error).message);
       setBusyId(null);
@@ -64,9 +63,8 @@ export default function DevBuyersPage() {
         ))}
       </ul>
       {user && (
-        <div className="mt-4 grid gap-3">
-          <AgeBandPicker buyerId={user.buyer_id} />
-          <button className="btn-ghost justify-self-start text-sm" onClick={() => { void logout(); }}>로그아웃</button>
+        <div className="mt-4">
+          <button className="btn-ghost text-sm" onClick={() => { void logout(); }}>로그아웃</button>
         </div>
       )}
     </div>

@@ -12,7 +12,7 @@ export default function PaymentFailPage() {
   const message = q.get("message");
   const orderId = orderIdOfToss(q.get("orderId"));
   const cancelled = isUserCancel(code);
-  const detail = orderId ? `/orders/${orderId}` : "/orders";
+  const detail = orderId ? `/my/orders/${orderId}` : "/my/orders";
 
   return (
     <div className="mx-auto max-w-md py-10">

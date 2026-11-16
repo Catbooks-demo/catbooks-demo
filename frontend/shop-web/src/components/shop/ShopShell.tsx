@@ -52,7 +52,7 @@ export function ShopShell({ children }: { children: ReactNode }) {
             ) : (
               <><Link href="/login" className="hover:text-ink-900">로그인</Link><Link href="/signup" className="hover:text-ink-900">회원가입</Link></>
             )}
-            <Link href="/orders" className="hover:text-ink-900">주문·배송</Link>
+            <Link href="/my" className="hover:text-ink-900">마이페이지</Link>
             {/* 다른 앱(게이트웨이의 /admin/)이라 라우터 Link가 아니라 일반 <a>로 연다. Link는 http(s)가 아니면 쇼핑몰 안 경로로 처리한다 */}
             <a href={DASHBOARD_WEB_URL} className="hover:text-ink-900">상담원 콘솔</a>
             <ThemeToggle />
@@ -64,7 +64,7 @@ export function ShopShell({ children }: { children: ReactNode }) {
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-5 gap-y-3 px-4 py-4">
           <Logo />
           <nav className="order-2 ml-auto flex items-center gap-1 sm:order-3 sm:ml-0" aria-label="바로가기">
-            <Link href={user ? "/orders" : "/login"} className="flex flex-col items-center gap-0.5 whitespace-nowrap rounded-lg px-3 py-1 text-[11px] text-ink-700 hover:bg-ink-100">
+            <Link href={user ? "/my" : "/login"} className="flex flex-col items-center gap-0.5 whitespace-nowrap rounded-lg px-3 py-1 text-[11px] text-ink-700 hover:bg-ink-100">
               <IconUser size={20} />마이
             </Link>
             <Link href="/cart" className="relative flex flex-col items-center gap-0.5 whitespace-nowrap rounded-lg px-3 py-1 text-[11px] text-ink-700 hover:bg-ink-100">

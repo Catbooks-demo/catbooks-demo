@@ -96,7 +96,7 @@ function Detail() {
 
   return (
     <RequireLogin user={user} ready={ready}>
-      <Link href="/orders" className="text-xs text-ink-500 hover:underline">‹ 주문 목록</Link>
+      <Link href="/my/orders" className="text-xs text-ink-500 hover:underline">‹ 주문 목록</Link>
       <ErrorNote error={error} />
       {o && !mine && <ErrorNote error="다른 구매자의 주문입니다." />}
       {o && mine && (
