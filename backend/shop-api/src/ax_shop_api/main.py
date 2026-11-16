@@ -690,8 +690,20 @@ def _buyer(request: Request, claimed: str | None = None) -> str:
     return claimed
 
 
+TRUST_PROXY_ENV = "SHOP_TRUST_PROXY"
+
+
 def _client_ip(request: Request) -> str:
-    """시도 제한 키. 앞단 프록시 헤더는 믿지 않고 연결한 주소만 쓴다."""
+    """시도 제한 키. 기본은 연결한 주소만 쓴다.
+
+    앞단 nginx(게이트웨이)를 거치면 모든 손님이 게이트웨이 주소로 보여 제한이 한 사람처럼 묶인다.
+    `SHOP_TRUST_PROXY=on`이면 `X-Forwarded-For`의 마지막 값(게이트웨이가 붙인 손님 주소)을 쓴다.
+    판매 서버 포트가 밖에 바로 열려 있으면 헤더를 꾸밀 수 있으니 게이트웨이 뒤에서만 켠다.
+    """
+    if (os.getenv(TRUST_PROXY_ENV) or "").strip().lower() in {"on", "1", "true"}:
+        last = (request.headers.get("x-forwarded-for") or "").split(",")[-1].strip()
+        if last:
+            return last
     return request.client.host if request.client else "unknown"
 
 

@@ -107,6 +107,7 @@
 | `SHOP_ORDERS_PUBLIC_READ` | `on` | `off`면 토큰 없는 주문 조회를 401로 막는다 |
 | `SHOP_DEMO_LOGIN` | (꺼짐) | `on`일 때만 비밀번호 없는 데모 로그인(`POST /auth/demo-login`, `POST /sessions`)이 열린다. 배포에는 넣지 않는다 |
 | `SHOP_SESSION_DAYS` | 30 | 로그인 토큰 유효 일수(1~3650, 그 밖의 값은 기본값) |
+| `SHOP_TRUST_PROXY` | (꺼짐) | `on`이면 로그인·가입 시도 제한이 `X-Forwarded-For`의 마지막 값(게이트웨이가 붙인 손님 주소)을 쓴다. 게이트웨이 뒤에서만 켜고, 그때는 판매 서버 포트를 밖에 열지 않는다(헤더를 꾸밀 수 있다) |
 
 가상 주문 스크립트(`backend/scripts/shop_traffic.py`)는 `required`에서 `admin` 토큰 + `buyer_id` 또는 회원 로그인으로 바꿔야 한다.
 

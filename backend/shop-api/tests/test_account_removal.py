@@ -304,3 +304,19 @@ def test_demo_buyers_only_when_enabled_and_without_accounts(
 def test_product_search_query_is_capped(client: TestClient) -> None:
     assert client.get("/api/shop/products", params={"q": "가" * 100}).status_code == 200
     assert client.get("/api/shop/products", params={"q": "가" * 101}).status_code == 422
+
+
+def test_client_ip_uses_forwarded_for_only_when_trusted(monkeypatch: pytest.MonkeyPatch) -> None:
+    from starlette.requests import Request
+
+    from ax_shop_api.main import _client_ip
+
+    scope = {
+        "type": "http",
+        "headers": [(b"x-forwarded-for", b"1.1.1.1, 203.0.113.7")],
+        "client": ("10.0.0.2", 5000),
+    }
+    monkeypatch.delenv("SHOP_TRUST_PROXY", raising=False)
+    assert _client_ip(Request(scope)) == "10.0.0.2"
+    monkeypatch.setenv("SHOP_TRUST_PROXY", "on")
+    assert _client_ip(Request(scope)) == "203.0.113.7"
