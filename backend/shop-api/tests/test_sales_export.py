@@ -211,3 +211,18 @@ def test_updated_at_index_exists_on_existing_file(tmp_path) -> None:
     conn.close()
     assert "idx_orders_updated_at" in names
     assert "idx_orders_updated_at" in plan
+
+
+def test_line_genre_code_comes_from_the_product(client: TestClient, db: Db) -> None:
+    with db.tx() as conn:
+        conn.execute("UPDATE products SET genre_code = 'it' WHERE product_id = 'prd_0001'")
+    with_genre = _order(client)
+    _set_updated(db, with_genre["order_id"], "2026-11-01T00:00:00Z")
+    other = client.post(
+        "/api/shop/orders",
+        json={"buyer_id": "buy_0001", "items": [{"product_id": "prd_0002", "qty": 1}]},
+    ).json()["data"]
+    _set_updated(db, other["order_id"], "2026-11-02T00:00:00Z")
+    rows = {o.order_id: o for o in _page(client).orders}
+    assert rows[with_genre["order_id"]].lines[0].genre_code == "it"
+    assert rows[other["order_id"]].lines[0].genre_code is None

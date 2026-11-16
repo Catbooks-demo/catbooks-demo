@@ -1,15 +1,16 @@
-"""데이터 권한 전용 고객 내보내기: 가명 ID와 연령대·성별·직업군뿐이고, 고친 구매자는 다시 나온다."""
+"""데이터 권한 전용 고객 내보내기(계약): 가명 ID와 값 있는 속성뿐이고, 고친 구매자는 다시 나온다."""
 
 import pytest
 from fastapi.testclient import TestClient
 
 from ax_agent_template import events
+from ax_contracts.data_access.shop_customers import ShopCustomersExportResult
 from ax_shop_api.db import Db
 from ax_shop_api.main import create_app
 
 DATA = {"Authorization": "Bearer mock:data"}
 SUPPORT = {"Authorization": "Bearer mock:support"}
-KEYS = {"buyer_id", "age_band", "gender", "occupation", "created_at", "updated_at"}
+KEYS = {"buyer_id", "joined_at", "updated_at", "attributes", "tenant_id"}
 EMAIL = "neko@example.com"
 PASSWORD = "correct-horse-1"
 
@@ -51,11 +52,25 @@ def _signup(client: TestClient) -> str:
 
 def test_export_has_no_names_or_contacts(client: TestClient) -> None:
     _signup(client)
-    res = client.get("/api/shop/customers/export", headers=DATA)
+    res = client.get("/api/shop/customers-export", headers=DATA)
     assert res.status_code == 200
-    rows = res.json()["data"]
+    body = res.json()["data"]
+    rows = body["customers"]
     assert rows and all(set(row) == KEYS for row in rows)
+    assert body["collected_at"] and "has_more" in body
     assert EMAIL not in res.text and "고양이" not in res.text
+    ShopCustomersExportResult.model_validate(body)
+
+
+def test_attributes_only_carry_filled_keys(client: TestClient) -> None:
+    _signup(client)  # age_band만 골랐다
+    rows = client.get("/api/shop/customers-export", params={"limit": 1000}, headers=DATA).json()[
+        "data"
+    ]["customers"]
+    new = next(r for r in rows if r["buyer_id"] == "buy_0031")
+    assert new["attributes"] == {"age_band": "20s"}
+    assert all(set(r["attributes"]) <= {"age_band", "gender", "occupation"} for r in rows)
+    assert all(v for r in rows for v in r["attributes"].values())
 
 
 def _poll(client: TestClient, cursor: str | None, limit: int) -> tuple[list[dict], str | None]:
@@ -65,10 +80,10 @@ def _poll(client: TestClient, cursor: str | None, limit: int) -> tuple[list[dict
         params: dict[str, object] = {"limit": limit}
         if cursor:
             params["cursor"] = cursor
-        meta_body = client.get("/api/shop/customers/export", params=params, headers=DATA).json()
-        rows += meta_body["data"]
-        cursor = meta_body["meta"]["next_cursor"]
-        if not meta_body["meta"]["has_more"]:
+        meta_body = client.get("/api/shop/customers-export", params=params, headers=DATA).json()
+        rows += meta_body["data"]["customers"]
+        cursor = meta_body["data"]["next_cursor"]
+        if not meta_body["data"]["has_more"]:
             return rows, cursor
 
 
@@ -79,8 +94,9 @@ def test_export_pages_by_cursor_and_returns_changes(client: TestClient) -> None:
     assert saved
 
     # 끝난 뒤 저장한 커서로 다시 읽으면 0줄이고 같은 커서가 돌아온다
-    idle = client.get("/api/shop/customers/export", params={"cursor": saved}, headers=DATA).json()
-    assert idle["data"] == [] and idle["meta"] == {"next_cursor": saved, "has_more": False}
+    idle = client.get("/api/shop/customers-export", params={"cursor": saved}, headers=DATA).json()
+    assert idle["data"]["customers"] == []
+    assert idle["data"]["next_cursor"] == saved and idle["data"]["has_more"] is False
 
     patch = client.patch(
         "/api/shop/me",
@@ -90,7 +106,7 @@ def test_export_pages_by_cursor_and_returns_changes(client: TestClient) -> None:
     assert patch.status_code == 200
     changed, saved2 = _poll(client, saved, 10)
     assert [r["buyer_id"] for r in changed] == ["buy_0031"]
-    assert changed[0]["occupation"] == "employee" and saved2 != saved
+    assert changed[0]["attributes"]["occupation"] == "employee" and saved2 != saved
 
 
 def test_earlier_buyer_changed_after_the_reader_passed_it_reappears(client: TestClient) -> None:
@@ -111,16 +127,28 @@ def test_earlier_buyer_changed_after_the_reader_passed_it_reappears(client: Test
 
 def test_export_rejects_a_bad_cursor_and_limit(client: TestClient) -> None:
     assert (
-        client.get("/api/shop/customers/export", params={"cursor": "!!"}, headers=DATA).status_code
+        client.get("/api/shop/customers-export", params={"cursor": "!!"}, headers=DATA).status_code
         == 400
     )
     assert (
-        client.get("/api/shop/customers/export", params={"limit": 0}, headers=DATA).status_code
+        client.get("/api/shop/customers-export", params={"limit": 0}, headers=DATA).status_code
         == 422
+    )
+    assert (
+        client.get("/api/shop/customers-export", params={"limit": 1001}, headers=DATA).status_code
+        == 422
+    )
+    assert (
+        client.get("/api/shop/customers-export", params={"limit": 1000}, headers=DATA).status_code
+        == 200
     )
 
 
+def test_old_path_is_gone(client: TestClient) -> None:
+    assert client.get("/api/shop/customers/export", headers=DATA).status_code == 404
+
+
 def test_export_is_data_or_admin_only(client: TestClient) -> None:
-    assert client.get("/api/shop/customers/export").status_code == 401
-    assert client.get("/api/shop/customers/export", headers=SUPPORT).status_code == 403
-    assert client.get("/api/shop/customers/export", headers=DATA).status_code == 200
+    assert client.get("/api/shop/customers-export").status_code == 401
+    assert client.get("/api/shop/customers-export", headers=SUPPORT).status_code == 403
+    assert client.get("/api/shop/customers-export", headers=DATA).status_code == 200
