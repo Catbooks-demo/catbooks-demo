@@ -1,36 +1,37 @@
 import { Link } from "@/lib/nav";
 import { useEffect, useState } from "react";
-import { ErrorNote, ProductCard } from "@/components/shop/bits";
+import { ErrorNote } from "@/components/shop/bits";
+import { ProductCard } from "@/components/shop/ProductCard";
+import { ProductRow } from "@/components/shop/ProductRow";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import type { Product } from "@/lib/types";
+import type { Genre, Product } from "@/lib/types";
 import { IconBox, IconReceipt, IconRefresh } from "@/components/icons";
-
-function Shelf({ title, href, items }: { title: string; href: string; items: Product[] }) {
-  return (
-    <section className="mt-12">
-      <div className="mb-4 flex items-end justify-between">
-        <h2 className="text-xl font-bold tracking-tight">{title}</h2>
-        <Link href={href} className="text-sm text-ink-500 hover:text-ink-900">더 보기 ›</Link>
-      </div>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 lg:grid-cols-5">
-        {items.map((p) => <ProductCard key={p.product_id} p={p} />)}
-      </div>
-    </section>
-  );
-}
 
 export default function Home() {
   const { user } = useAuth();
-  const [all, setAll] = useState<Product[]>([]);
+  const [best, setBest] = useState<Product[] | null>(null);
+  const [fresh, setFresh] = useState<Product[] | null>(null);
+  const [rows, setRows] = useState<{ genre: Genre; items: Product[] }[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.products().then(setAll).catch((e: Error) => setError(e.message));
+    let live = true;
+    const fail = (e: Error) => live && setError(e.message);
+    api.best({ limit: 5 }).then((r) => live && setBest(r)).catch(fail);
+    api.productsPage({ page: 1, size: 6, sort: "new" }).then((r) => live && setFresh(r.items)).catch(fail);
+    // 상품이 있는 장르만 줄을 만든다. 베스트는 팔린 상품만 세므로, 비어 있으면 새로 나온 순으로 채운다.
+    api.genres().then(async (genres) => {
+      const rowOf = async (g: Genre) => {
+        let items: Product[] = await api.best({ genre: g.genre_code, limit: 6 });
+        if (!items.length) items = (await api.productsPage({ genre: g.genre_code, page: 1, size: 6, sort: "new" })).items;
+        return { genre: g, items };
+      };
+      const got = await Promise.all(genres.filter((g) => g.product_count > 0).map((g) => rowOf(g).catch(() => ({ genre: g, items: [] as Product[] }))));
+      if (live) setRows(got.filter((r) => r.items.length > 0));
+    }).catch(fail);
+    return () => { live = false; };
   }, []);
-  // TODO(ax-backend#385): 판매량순·신상품순 API가 생기면 선반을 서버 기준으로 바꾼다. 지금은 상품 목록을 화면에서 나눈다.
-  const books = all.filter((p) => p.category_code === "book").slice(0, 5);
-  const goods = all.filter((p) => p.category_code === "stationery").slice(0, 5);
 
   return (
     <div>
@@ -62,9 +63,31 @@ export default function Home() {
         </aside>
       </section>
 
-      <Shelf title="전체 상품" href="/products" items={all.slice(0, 5)} />
-      <Shelf title="책" href="/products?category=book" items={books} />
-      <Shelf title="책상 위를 채우는 문구" href="/products?category=stationery" items={goods} />
+      <section className="mt-10 grid gap-8 lg:grid-cols-[1fr_1fr]">
+        <div>
+          <div className="mb-4 flex items-end justify-between">
+            <h2 className="text-xl font-bold tracking-tight">베스트 TOP 5</h2>
+            <Link href="/products?sort=popular" className="text-sm text-ink-500 hover:text-ink-900">더 보기 ›</Link>
+          </div>
+          {best && !best.length && <p className="text-sm text-ink-500">아직 집계된 판매가 없어요.</p>}
+          <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3">
+            {(best ?? []).map((p, i) => <ProductCard key={p.product_id} p={p} rank={i + 1} />)}
+          </div>
+        </div>
+        <div>
+          <div className="mb-4 flex items-end justify-between">
+            <h2 className="text-xl font-bold tracking-tight">새로 나온 책</h2>
+            <Link href="/products?sort=new" className="text-sm text-ink-500 hover:text-ink-900">더 보기 ›</Link>
+          </div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3">
+            {(fresh ?? []).map((p) => <ProductCard key={p.product_id} p={p} />)}
+          </div>
+        </div>
+      </section>
+
+      {rows.map(({ genre, items }) => (
+        <ProductRow key={genre.genre_code} title={genre.name} href={`/products?genre=${genre.genre_code}`} items={items} />
+      ))}
     </div>
   );
 }

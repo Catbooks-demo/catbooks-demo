@@ -1,17 +1,20 @@
 import { Link } from "@/lib/nav";
 import { useRouter, useSearchParams } from "@/lib/nav";
-import { Suspense, useEffect, useMemo, useState } from "react";
-import { Empty, ErrorNote, PageTitle, ProductCard } from "@/components/shop/bits";
-import { api } from "@/lib/api";
+import { Suspense, useEffect, useState } from "react";
+import { Empty, ErrorNote, PageTitle } from "@/components/shop/bits";
+import { ProductCard } from "@/components/shop/ProductCard";
+import { api, ApiError } from "@/lib/api";
 import { useCategories } from "@/lib/categories";
-import type { Product } from "@/lib/types";
+import { useGenres } from "@/lib/genres";
+import type { ProductPage, ProductSort } from "@/lib/types";
 
-// TODO(ax-backend#385): 판매량순·신상품순과 서버 검색이 생기면 서버 기준으로 바꾼다. 지금은 shop-api 상품 목록을 화면에서 거른다.
-const SORTS = [
-  { key: "default", label: "기본순" },
+const SORTS: { key: ProductSort; label: string }[] = [
+  { key: "popular", label: "인기순" },
+  { key: "new", label: "신상품순" },
   { key: "price_asc", label: "낮은 가격순" },
   { key: "price_desc", label: "높은 가격순" },
 ];
+const SIZE = 24;
 
 export default function ProductsPage() {
   return (
@@ -24,52 +27,90 @@ export default function ProductsPage() {
 function List() {
   const params = useSearchParams();
   const router = useRouter();
+  const genre = params.get("genre") ?? "";
   const category = params.get("category") ?? "";
   const q = params.get("q") ?? "";
-  const sort = params.get("sort") ?? "default";
-  const [all, setAll] = useState<Product[] | null>(null);
+  const sortParam = params.get("sort") ?? "";
+  const sort: ProductSort = SORTS.some((s) => s.key === sortParam) ? (sortParam as ProductSort) : "popular";
+  const page = Math.max(1, Number(params.get("page")) || 1);
+  const [data, setData] = useState<ProductPage | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { genres } = useGenres();
+  const { label: categoryLabel } = useCategories();
 
-  useEffect(() => { api.products().then(setAll).catch((e: Error) => setError(e.message)); }, []);
-
-  const { categories, label: categoryLabel } = useCategories();
-  const items = useMemo(() => {
-    if (!all) return null;
-    const needle = q.trim().toLowerCase();
-    const list = all.filter((p) => (!category || p.category_code === category) && (!needle || p.name.toLowerCase().includes(needle)));
-    if (sort === "price_asc") return [...list].sort((a, b) => a.price - b.price);
-    if (sort === "price_desc") return [...list].sort((a, b) => b.price - a.price);
-    return list;
-  }, [all, category, q, sort]);
+  useEffect(() => {
+    let live = true;
+    setError(null);
+    setLoading(true);
+    api.productsPage({ q, genre, category, sort, page, size: SIZE })
+      .then((r) => { if (live) { setData(r); setLoading(false); } })
+      .catch((e: Error) => {
+        if (!live) return;
+        setLoading(false);
+        // 없는 장르(422)는 오류 대신 "결과 없음"으로 보여 준다
+        if (e instanceof ApiError && e.status === 422) setData({ items: [], total: 0, page, size: SIZE });
+        else setError(e.message);
+      });
+    return () => { live = false; };
+  }, [q, genre, category, sort, page]);
 
   const go = (next: Record<string, string>) => {
-    const sp = new URLSearchParams({ ...(category && { category }), ...(q && { q }), sort, ...next });
-    for (const [k, v] of [...sp.entries()]) if (!v || (k === "sort" && v === "default")) sp.delete(k);
-    router.push(`/products?${sp.toString()}`);
+    const sp = new URLSearchParams({ ...(genre && { genre }), ...(category && { category }), ...(q && { q }), sort, ...next });
+    for (const [k, v] of [...sp.entries()]) if (!v || (k === "sort" && v === "popular") || (k === "page" && v === "1")) sp.delete(k);
+    const qs = sp.toString();
+    router.push(qs ? `/products?${qs}` : "/products");
   };
-  const title = q ? `'${q}' 검색 결과` : category ? categoryLabel(category) : "전체 상품";
+  /** 현재 검색어·분류·정렬은 두고 일부만 바꾼 목록 주소 */
+  const keep = (next: Record<string, string>) => {
+    const sp = new URLSearchParams({ ...(category && { category }), ...(q && { q }), ...(sort !== "popular" && { sort }), ...next });
+    for (const [k, v] of [...sp.entries()]) if (!v) sp.delete(k);
+    const qs = sp.toString();
+    return qs ? `/products?${qs}` : "/products";
+  };
+  const genreName = genres.find((g) => g.genre_code === genre)?.name;
+  const title = q ? `'${q}' 검색 결과` : genre ? (genreName ?? "장르") : category ? categoryLabel(category) : "전체 상품";
+  const lastPage = data ? Math.max(1, Math.ceil(data.total / data.size)) : 1;
 
   return (
     <div>
-      <PageTitle title={title} sub={items ? `${items.length}개 상품` : undefined}
+      <PageTitle title={title} sub={data ? `${data.total}개 상품` : undefined}
         right={
           <label className="flex items-center gap-2 text-sm text-ink-500">정렬
-            <select className="field w-auto py-1.5" value={sort} onChange={(e) => go({ sort: e.target.value })}>
+            <select className="field w-auto py-1.5" value={sort} onChange={(e) => go({ sort: e.target.value, page: "" })}>
               {SORTS.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
             </select>
           </label>
         } />
-      <div className="mb-6 flex flex-wrap gap-2">
-        <Link href="/products" className={`chip py-1.5 text-xs ${!category ? "bg-brand-600 text-white" : "bg-ink-100 text-ink-700"}`}>전체</Link>
-        {categories.map(({ category_code: c }) => (
-          <Link key={c} href={`/products?category=${c}`}
-            className={`chip py-1.5 text-xs ${category === c ? "bg-brand-600 text-white" : "bg-ink-100 text-ink-700"}`}>{categoryLabel(c)}</Link>
-        ))}
-      </div>
-      <ErrorNote error={error} />
-      {items && !items.length && <Empty>조건에 맞는 상품이 없습니다.</Empty>}
-      <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 lg:grid-cols-5">
-        {(items ?? []).map((p) => <ProductCard key={p.product_id} p={p} />)}
+      <div className="grid gap-6 lg:grid-cols-[180px_1fr]">
+        <nav aria-label="장르" className="flex gap-2 overflow-x-auto lg:flex-col lg:gap-1 lg:overflow-visible">
+          <Link href={keep({ genre: "" })}
+            className={`chip shrink-0 whitespace-nowrap py-1.5 text-xs lg:rounded-md lg:px-3 lg:text-sm ${!genre ? "bg-brand-600 text-white" : "bg-ink-100 text-ink-700"}`}>전체</Link>
+          {genres.filter((g) => g.product_count > 0 || g.genre_code === genre).map((g) => (
+            <Link key={g.genre_code} href={keep({ genre: g.genre_code })}
+              className={`chip shrink-0 whitespace-nowrap py-1.5 text-xs lg:rounded-md lg:px-3 lg:text-sm ${genre === g.genre_code ? "bg-brand-600 text-white" : "bg-ink-100 text-ink-700"}`}>{g.name}</Link>
+          ))}
+        </nav>
+        <div>
+          <ErrorNote error={error} />
+          {data && !data.items.length && (
+            <Empty>
+              결과가 없어요.{" "}
+              {data.total > 0 && page > lastPage && <button className="font-semibold text-brand-600 underline" onClick={() => go({ page: String(lastPage) })}>마지막 쪽으로 가기</button>}{" "}
+              <Link href="/products" className="font-semibold text-brand-600 underline">전체 상품 보기</Link>
+            </Empty>
+          )}
+          <div className={`grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 xl:grid-cols-4 transition-opacity ${loading ? "opacity-50" : ""}`}>
+            {(data?.items ?? []).map((p) => <ProductCard key={p.product_id} p={p} />)}
+          </div>
+          {data && (lastPage > 1 || page > 1) && (
+            <div className="mt-8 flex items-center justify-center gap-4 text-sm">
+              <button className="btn-ghost" disabled={page <= 1} onClick={() => go({ page: String(Math.min(page - 1, lastPage)) })}>이전</button>
+              <span className="tabular-nums text-ink-500">{page} / {lastPage}</span>
+              <button className="btn-ghost" disabled={page >= lastPage} onClick={() => go({ page: String(page + 1) })}>다음</button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

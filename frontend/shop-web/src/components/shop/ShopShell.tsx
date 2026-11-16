@@ -6,6 +6,7 @@ import { useCart } from "@/lib/cart";
 import { DASHBOARD_WEB_URL } from "@/lib/env";
 import { useCategories } from "@/lib/categories";
 import { IconCart, IconSearch, IconUser } from "../icons";
+import { useGenres } from "@/lib/genres";
 import { NoticeBanners } from "./NoticeBanners";
 import { ThemeToggle } from "../ThemeToggle";
 
@@ -24,6 +25,8 @@ export function ShopShell({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
   const cart = useCart();
   const { categories, label } = useCategories();
+  const { genres } = useGenres();
+  const [genreOpen, setGenreOpen] = useState(false);
   const [q, setQ] = useState("");
 
   function search(e: FormEvent) {
@@ -88,7 +91,20 @@ export function ShopShell({ children }: { children: ReactNode }) {
                 </li>
               );
             })}
+            <li>
+              <button type="button" aria-expanded={genreOpen} onClick={() => setGenreOpen((o) => !o)}
+                className="block whitespace-nowrap px-3 py-3 text-ink-700 hover:text-brand-600">분야 {genreOpen ? "▴" : "▾"}</button>
+            </li>
           </ul>
+          {genreOpen && (
+            <ul className="mx-auto flex max-w-6xl flex-wrap gap-2 px-4 pb-3 text-xs">
+              {genres.filter((g) => g.product_count > 0).map((g) => (
+                <li key={g.genre_code}>
+                  <Link href={`/products?genre=${g.genre_code}`} onClick={() => setGenreOpen(false)} className="chip bg-ink-100 py-1.5 text-ink-700 hover:text-brand-600">{g.name}</Link>
+                </li>
+              ))}
+            </ul>
+          )}
         </nav>
       </header>
 
