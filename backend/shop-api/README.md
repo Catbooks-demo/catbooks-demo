@@ -15,8 +15,11 @@
 
 | 메서드·경로 | 내용 |
 | --- | --- |
-| `GET /api/shop/sellers`, `GET /api/shop/products[?seller_id&category_code]`, `GET /api/shop/products/{id}` | 판매자·상품 조회. 상품에 `isbn13`·`author`·`publisher`(책 정보)·`genre_code`(장르 코드, 모르면 `null`)가 있다 |
-| `POST /api/shop/products`, `PATCH /api/shop/products/{id}` | 상품 등록·수정(판매 중지는 `active=false`). 선택 **장르** `genre_code`(`ax_shop_api/genres.py`의 `GENRES` 16개 코드 중 하나, 아니면 422, 빈 글·`null`은 모름·지움이고 PATCH에서 칸을 안 보내면 그대로)와 선택 **책 정보** `isbn13`·`author`·`publisher`를 받는다: `isbn13`은 하이픈·공백을 뺀 13자리 숫자이고 `978`·`979`로 시작하며 확인 숫자가 맞아야 한다(아니면 422, 하이픈은 지우고 저장), `author`·`publisher`는 100자까지(앞뒤 공백은 지운다). 빈 글·`null`은 "모른다"이고 `PATCH`에서는 지운다(칸을 안 보내면 그대로). 판매자 입점(`POST /api/shop/sellers`)의 첫 상품도 같은 칸을 받는다. 시드 상품에는 넣지 않았다(값을 지어내지 않는다). 쓰기 권한은 기존과 같다(`admin` 등 상품 쓰기 토큰) |
+| `GET /api/shop/products?q&genre&sort&page&size` | 쿼리가 없으면 지금처럼 활성 상품 **전체 배열**(AXcellent가 이렇게 읽는다). `q`는 이름·저자·출판사 부분 일치(대소문자 무시), `genre`는 `genre_code`로 거르고, `sort`는 `popular`(최근 30일 결제 수량, 기본)·`new`·`price_asc`·`price_desc`. `page`(1부터)를 주면 `size`(1~60, 기본 24)개씩 자르고 `meta`에 `total`·`page`·`size`를 싣는다 |
+| `GET /api/shop/genres` | `[{genre_code, name, product_count}]`, `GENRES` 순서, 판매 중 상품 수(토큰 없음) |
+| `GET /api/shop/products/best?genre&days=30&limit=10` | 토큰 없는 공개 베스트. 최근 `days`(1~93)일 **결제된 주문**의 수량 순 상품과 `sold_qty`(`limit` 1~50). `(genre, days, limit)`별로 `SHOP_BEST_CACHE_S`초 프로세스 안에 캐시 |
+| `GET /api/shop/sellers`, `GET /api/shop/products[?seller_id&category_code]`, `GET /api/shop/products/{id}` | 판매자·상품 조회. 상품에 `description`(소개, 최대 4000자, 모르면 `null`)과 `isbn13`·`author`·`publisher`(책 정보)·`genre_code`(장르 코드, 모르면 `null`)가 있다 |
+| `POST /api/shop/products`, `PATCH /api/shop/products/{id}` | 상품 등록·수정(판매 중지는 `active=false`). 선택 **장르** `genre_code`(`ax_shop_api/genres.py`의 `GENRES` 16개 코드 중 하나, 아니면 422, 빈 글·`null`은 모름·지움이고 PATCH에서 칸을 안 보내면 그대로)와 선택 **소개** `description`(4000자까지, 앞뒤 공백은 지움)과 선택 **책 정보** `isbn13`·`author`·`publisher`를 받는다: `isbn13`은 하이픈·공백을 뺀 13자리 숫자이고 `978`·`979`로 시작하며 확인 숫자가 맞아야 한다(아니면 422, 하이픈은 지우고 저장), `author`·`publisher`는 100자까지(앞뒤 공백은 지운다). 빈 글·`null`은 "모른다"이고 `PATCH`에서는 지운다(칸을 안 보내면 그대로). 판매자 입점(`POST /api/shop/sellers`)의 첫 상품도 같은 칸을 받는다. 시드 상품에는 넣지 않았다(값을 지어내지 않는다). 쓰기 권한은 기존과 같다(`admin` 등 상품 쓰기 토큰) |
 | `GET /api/shop/users`, `GET /api/shop/users/{buyer_id}`, `POST /api/shop/sessions` | 쇼핑몰 화면용 구매자. 목록은 `admin` 토큰만, 한 명 조회는 본인(로그인 토큰) 또는 `admin`만이다(아래 3-1). `sessions`는 `SHOP_DEMO_LOGIN=on`일 때만 `{buyer_id}`를 받아 비밀번호 없는 데모 로그인 `{user, token}`을 주고, 꺼져 있으면 404다(`SHOP_BUYER_AUTH=legacy`에서는 옛 동작대로 토큰 없이 `{user}`만 준다). 한 명 조회·`sessions`의 사용자에는 `age_band`(연령대 구간 `10s`·`20s`·`30s`·`40s`·`50s_plus`, 모르면 `null`)와 `gender`(성별 코드 `female`·`male`·`no_answer`, 모르면 `null`)가 있고, 전체 목록에는 싣지 않는다 |
 | `PATCH /api/shop/users/{buyer_id}` | 구매자 연령대 구간·성별 코드를 정한다. **보낸 칸만 바꾸고**(안 보낸 칸은 그대로) 본문 `{age_band, gender}` 중 하나는 있어야 한다(없으면 422). `gender`는 `female`·`male`·`no_answer` 중 하나이거나 `null`(지움)이고 직업·생년월일은 받지 않는다. 아래 `age_band`는 `10s`·`20s`·`30s`·`40s`·`50s_plus` 중 하나이거나 `null`(지움)이고 칸이 없거나 다른 값·다른 키는 422다. 생년월일·나이는 받지 않고 구간만 저장한다(개인정보 부담을 줄인다). 없는 구매자는 404 `BUYER_NOT_FOUND`. 본인(로그인 토큰) 또는 `admin` 토큰만 바꿀 수 있고(`GET`으로 읽는 것도 같다, 아래 3-1) 바꾸면 `buyers.updated_at`을 적는다. 값이 들어오기 전의 구매자는 `age_band`가 `null`이고 채워 넣지 않는다 |
 | `GET /api/shop/categories` | 판매 중 상품의 카테고리(`category_code`·`name`·`product_count`). 표시 이름을 모르는 코드는 `name`이 null |
@@ -92,6 +95,7 @@
 | 환경변수 | 기본값 | 뜻 |
 | --- | --- | --- |
 | `SHOP_BUYER_AUTH` | `required` | `required`: 구매자 경로는 로그인 토큰(또는 `admin` 대신하기)만. `legacy`: 토큰이 없으면 요청의 `buyer_id`를 믿는다(옛 동작, 시험·전환 기간용). 모르는 값은 `required` |
+| `SHOP_BEST_CACHE_S` | `300` | 공개 베스트 결과를 캐시하는 초(0이면 캐시 안 함) |
 | `SHOP_ORDERS_PUBLIC_READ` | `on` | `off`면 토큰 없는 주문 조회를 401로 막는다 |
 | `SHOP_DEMO_LOGIN` | (꺼짐) | `on`일 때만 비밀번호 없는 데모 로그인(`POST /auth/demo-login`, `POST /sessions`)이 열린다. 배포에는 넣지 않는다 |
 | `SHOP_SESSION_DAYS` | 30 | 로그인 토큰 유효 일수(1~3650, 그 밖의 값은 기본값) |

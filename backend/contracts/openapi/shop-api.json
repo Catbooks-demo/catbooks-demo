@@ -974,6 +974,18 @@
             "title": "Category Code",
             "type": "string"
           },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
           "genre_code": {
             "anyOf": [
               {
@@ -1062,6 +1074,18 @@
               }
             ],
             "title": "Author"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
           },
           "genre_code": {
             "anyOf": [
@@ -1291,6 +1315,18 @@
           "category_code": {
             "title": "Category Code",
             "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
           },
           "genre_code": {
             "anyOf": [
@@ -4719,6 +4755,27 @@
         "summary": "Failed Orders"
       }
     },
+    "/api/shop/genres": {
+      "get": {
+        "description": "장르 코드·이름과 판매 중 상품 수(`genres.GENRES` 순서). 토큰 없음.",
+        "operationId": "list_genres_api_shop_genres_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Genres Api Shop Genres Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Genres"
+      }
+    },
     "/api/shop/ideas": {
       "get": {
         "description": "내 아이디어 내역(읽기): 접수 번호·종류·앞부분·처리 상태·안내 한 줄. 본인만(`_buyer`).",
@@ -5790,6 +5847,7 @@
     },
     "/api/shop/products": {
       "get": {
+        "description": "쿼리가 없으면 활성 상품 전체 배열(지금 그대로). `page`가 있으면 `meta`에 total 등.",
         "operationId": "list_products_api_shop_products_get",
         "parameters": [
           {
@@ -5822,6 +5880,89 @@
                 }
               ],
               "title": "Category Code"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "genre",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Genre"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "popular",
+                    "new",
+                    "price_asc",
+                    "price_desc"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sort"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page"
+            }
+          },
+          {
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 24,
+              "maximum": 60,
+              "minimum": 1,
+              "title": "Size",
+              "type": "integer"
             }
           }
         ],
@@ -5906,6 +6047,79 @@
           }
         },
         "summary": "Create Product"
+      }
+    },
+    "/api/shop/products/best": {
+      "get": {
+        "description": "최근 `days`일 결제 수량이 많은 상품(각 `sold_qty`). 토큰 없음, 잠깐 캐시한다.",
+        "operationId": "best_products_api_shop_products_best_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "genre",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Genre"
+            }
+          },
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 93,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Best Products Api Shop Products Best Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Best Products"
       }
     },
     "/api/shop/products/{product_id}": {

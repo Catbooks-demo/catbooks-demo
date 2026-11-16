@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import sqlite3
 import time
@@ -21,6 +22,7 @@ from typing import Any
 from ax_contracts.schemas import EventType, PaymentFailedData
 from ax_shop_api import outbox
 from ax_shop_api.db import TENANT_ID, Db
+from ax_shop_api.genres import GENRES
 from ax_shop_api.monitor import FaultKind, Monitor
 
 CANCELLABLE = ("pending_payment", "payment_failed")
@@ -50,6 +52,23 @@ ORDER_PAGE_DEFAULT = 200
 ORDER_PAGE_MAX = 1000
 # 주문 응답의 결제 항목(순서 그대로)
 _PAYMENT_KEYS = ("payment_id", "amount", "method_code", "status", "failure_code", "created_at")
+
+
+PRODUCT_PAGE_DEFAULT = 24
+PRODUCT_POPULAR_DAYS = 30  # "인기순"이 세는 기간(일)
+# 결제된 주문(`orders.status = 'paid'`)의 최근 기간 상품별 수량. 매출 요약과 같은 "결제됨" 기준이다
+_SOLD_SQL = (
+    "SELECT i.product_id, SUM(i.qty) AS sold_qty FROM orders o "
+    "JOIN order_items i ON i.order_id = o.order_id "
+    "WHERE o.tenant_id = ? AND o.status = 'paid' AND o.created_at >= ? GROUP BY i.product_id"
+)
+
+
+def _best_cache_seconds() -> float:
+    try:
+        return max(0.0, float(os.getenv("SHOP_BEST_CACHE_S") or 300))
+    except ValueError:
+        return 300.0
 
 
 def _now() -> str:
@@ -241,6 +260,7 @@ class Shop:
         self.monitor = monitor or Monitor(db)
         self.clock = clock
         self.last_release: dict[str, Any] | None = None
+        self._best_cache: dict[tuple[str | None, int, int], tuple[float, list[dict[str, Any]]]] = {}
         # 결제 설정 버전이 지금 값이 된 시각·바꾼 쪽 (켤 때는 v1, 바꾼 쪽 없음)
         self.payment_version_since = _now()
         self.payment_version_by: str | None = None
@@ -260,16 +280,105 @@ class Shop:
         ]
 
     def list_products(
-        self, seller_id: str | None = None, category_code: str | None = None
-    ) -> list[dict[str, Any]]:
-        sql, args = "SELECT * FROM products WHERE active = 1", []
+        self,
+        seller_id: str | None = None,
+        category_code: str | None = None,
+        *,
+        q: str | None = None,
+        genre: str | None = None,
+        sort: str | None = None,
+        page: int | None = None,
+        size: int = PRODUCT_PAGE_DEFAULT,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """활성 상품. 두 번째 값은 (쪽 나누기 전) 전체 수.
+
+        `q`·`genre`·`sort`·`page`가 모두 없으면 지금처럼 product_id 순 전체다. 그 밖에는 `sort`
+        (기본 `popular`)로 정렬하고, `page`가 있을 때만 `size`개씩 자른다.
+        """
+        where, args = ["p.active = 1"], []
         for column, value in (("seller_id", seller_id), ("category_code", category_code)):
             if value:
-                sql += f" AND {column} = ?"
+                where.append(f"p.{column} = ?")
                 args.append(value)
+        if genre:
+            where.append("p.genre_code = ?")
+            args.append(genre)
+        if q and q.strip():
+            like = "%" + re.sub(r"([\\%_])", r"\\\1", q.strip()) + "%"
+            where.append(
+                "(p.name LIKE ? ESCAPE '\\' OR p.author LIKE ? ESCAPE '\\' "
+                "OR p.publisher LIKE ? ESCAPE '\\')"
+            )
+            args += [like, like, like]
+        join, order = "", "p.product_id"
+        if sort or q or genre or page is not None:
+            sort = sort or "popular"
+            if sort == "popular":
+                join = f" LEFT JOIN ({_SOLD_SQL}) s ON s.product_id = p.product_id"
+                order = "COALESCE(s.sold_qty, 0) DESC, p.product_id"
+                args = [TENANT_ID, self._since(PRODUCT_POPULAR_DAYS), *args]
+            elif sort == "new":
+                order = "p.created_at DESC, p.product_id DESC"
+            elif sort == "price_asc":
+                order = "p.price ASC, p.product_id"
+            elif sort == "price_desc":
+                order = "p.price DESC, p.product_id"
+        base = f"FROM products p{join} WHERE {' AND '.join(where)}"  # noqa: S608 - 고정 문구뿐
+        sql = f"SELECT p.* {base} ORDER BY {order}"  # noqa: S608
         with self.db.tx() as conn:
-            rows = conn.execute(sql + " ORDER BY product_id", args).fetchall()
-        return [self._product(r) for r in rows]
+            if page is not None:
+                total = conn.execute(f"SELECT COUNT(*) {base}", args).fetchone()[0]  # noqa: S608
+                sql += " LIMIT ? OFFSET ?"
+                args = [*args, size, (page - 1) * size]
+            rows = conn.execute(sql, args).fetchall()
+        items = [self._product(r) for r in rows]
+        return items, (total if page is not None else len(items))
+
+    def _since(self, days: int) -> str:
+        return (datetime.fromtimestamp(self.clock(), UTC) - timedelta(days=days)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+
+    def list_genres(self) -> list[dict[str, Any]]:
+        """장르 코드·이름·판매 중 상품 수. `GENRES` 순서."""
+        with self.db.tx() as conn:
+            rows = conn.execute(
+                "SELECT genre_code, COUNT(*) AS n FROM products WHERE active = 1 "
+                "AND genre_code IS NOT NULL GROUP BY genre_code"
+            ).fetchall()
+        counts = {r["genre_code"]: r["n"] for r in rows}
+        return [
+            {"genre_code": code, "name": name, "product_count": counts.get(code, 0)}
+            for code, name in GENRES.items()
+        ]
+
+    def best_products(self, genre: str | None, days: int, limit: int) -> list[dict[str, Any]]:
+        """최근 `days`일 결제 수량이 많은 상품(결제된 주문만). 결과는 잠깐 캐시한다.
+
+        캐시 초 수는 `SHOP_BEST_CACHE_S`(기본 300, 0이면 캐시 안 함)이고 (장르, 일수, 개수)별이다.
+        """
+        ttl = _best_cache_seconds()
+        key = (genre or None, days, limit)
+        now = self.clock()
+        hit = self._best_cache.get(key)
+        if ttl > 0 and hit is not None and hit[0] > now:
+            return [dict(item) for item in hit[1]]
+        args: list[Any] = [TENANT_ID, self._since(days)]
+        sql = (
+            f"SELECT p.*, s.sold_qty FROM ({_SOLD_SQL}) s "  # noqa: S608 - 고정 문구
+            "JOIN products p ON p.product_id = s.product_id WHERE p.active = 1"
+        )
+        if genre:
+            sql += " AND p.genre_code = ?"
+            args.append(genre)
+        sql += " ORDER BY s.sold_qty DESC, p.product_id LIMIT ?"
+        args.append(limit)
+        with self.db.tx() as conn:
+            rows = conn.execute(sql, args).fetchall()
+        items = [self._product(r) | {"sold_qty": r["sold_qty"]} for r in rows]
+        if ttl > 0:
+            self._best_cache[key] = (now + ttl, items)
+        return [dict(item) for item in items]
 
     def get_product(self, product_id: str) -> dict[str, Any]:
         with self.db.tx() as conn:
@@ -283,7 +392,13 @@ class Shop:
     @staticmethod
     def _product(row: sqlite3.Row) -> dict[str, Any]:
         keys = ("product_id", "seller_id", "name", "category_code", "price", "stock")
-        book = ("isbn13", "author", "publisher", "genre_code")  # 책 정보·장르(선택). 비면 None
+        book = (
+            "isbn13",
+            "author",
+            "publisher",
+            "genre_code",
+            "description",
+        )  # 책 정보·장르(선택). 비면 None
         return {key: row[key] for key in (*keys, *book)} | {"active": bool(row["active"])}
 
     def get_order(self, order_id: str) -> dict[str, Any]:
@@ -474,12 +589,12 @@ class Shop:
                 conn.execute(
                     "INSERT INTO products (product_id, seller_id, name, category_code, price, "
                     "stock, active, tenant_id, context_id, created_at, updated_at, isbn13, author, "
-                    "publisher, genre_code) "
-                    "VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, ?, ?, ?, ?, ?, ?)",
+                    "publisher, genre_code, description) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
                     (product_id, seller_id, item["name"], item["category_code"],
                      item["price"], item["stock"], TENANT_ID, now, now,
                      item.get("isbn13"), item.get("author"), item.get("publisher"),
-                     item.get("genre_code")),
+                     item.get("genre_code"), item.get("description")),
                 )  # fmt: skip
             outbox.enqueue(
                 conn,
@@ -511,6 +626,7 @@ class Shop:
         author: str | None = None,
         publisher: str | None = None,
         genre_code: str | None = None,
+        description: str | None = None,
     ) -> dict[str, Any]:
         with self.db.tx() as conn:
             if not conn.execute(
@@ -522,9 +638,10 @@ class Shop:
             conn.execute(
                 "INSERT INTO products (product_id, seller_id, name, category_code, price, stock, "
                 "active, tenant_id, context_id, created_at, updated_at, isbn13, author, "
-                "publisher, genre_code) VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, ?, ?, ?, ?, ?, ?)",
+                "publisher, genre_code, description) "
+                "VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
                 (product_id, seller_id, name, category_code, price, stock, TENANT_ID, now, now,
-                 isbn13, author, publisher, genre_code),
+                 isbn13, author, publisher, genre_code, description),
             )  # fmt: skip
         return self.get_product(product_id)
 
@@ -538,6 +655,7 @@ class Shop:
             "author",
             "publisher",
             "genre_code",
+            "description",
         }
         fields = {k: (int(v) if k == "active" else v) for k, v in changes.items() if k in allowed}
         self.get_product(product_id)

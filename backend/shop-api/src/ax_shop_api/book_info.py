@@ -9,6 +9,7 @@ from __future__ import annotations
 
 AUTHOR_MAX = 100
 PUBLISHER_MAX = 100
+DESCRIPTION_MAX = 4000
 ISBN_PREFIXES = ("978", "979")
 
 
