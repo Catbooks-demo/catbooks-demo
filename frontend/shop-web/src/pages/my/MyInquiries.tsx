@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { Empty, ErrorNote, PageTitle } from "@/components/shop/bits";
 import { api } from "@/lib/api";
+import { INQUIRY_STATUS_KO } from "@/lib/labels";
 import { shortDateTime } from "@/lib/format";
 import { Link } from "@/lib/nav";
 import type { MyInquiry } from "@/lib/types";
 
-const STATUS_KO: Record<string, string> = { open: "답변 대기", resolved: "해결됨" };
 
 export default function MyInquiries() {
   const [items, setItems] = useState<MyInquiry[] | null>(null);
@@ -27,7 +27,7 @@ export default function MyInquiries() {
         {items?.map((q) => (
           <li key={q.id} className="rounded-xl border border-ink-100 bg-surface p-4 text-sm">
             <div className="flex flex-wrap items-center gap-2">
-              <span className={`chip ${q.status === "resolved" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{STATUS_KO[q.status] ?? q.status}</span>
+              <span className={`chip ${q.status === "resolved" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{INQUIRY_STATUS_KO[q.status] ?? "처리 중"}</span>
               <span className="font-semibold">{q.subject}</span>
               <span className="ml-auto text-xs text-ink-500">#{q.id} · {shortDateTime(q.updated_at)}</span>
             </div>

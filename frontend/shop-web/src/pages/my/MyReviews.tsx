@@ -8,11 +8,18 @@ import type { MyReview, Reviewable } from "@/lib/types";
 export default function MyReviews() {
   const [reviews, setReviews] = useState<MyReview[] | null>(null);
   const [todo, setTodo] = useState<Reviewable[]>([]);
+  const [names, setNames] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
-    api.myReviews().then((v) => { if (live) setReviews(v); }).catch(() => { if (live) setError("후기를 불러오지 못했어요. 잠시 후 다시 확인해 주세요."); });
+    api.myReviews().then((v) => {
+      if (!live) return;
+      setReviews(v);
+      for (const id of new Set(v.map((r) => r.product_id))) {
+        api.product(id).then((p) => { if (live) setNames((n) => ({ ...n, [id]: p.name })); }).catch(() => undefined);
+      }
+    }).catch(() => { if (live) setError("후기를 불러오지 못했어요. 잠시 후 다시 확인해 주세요."); });
     api.reviewable().then((v) => { if (live) setTodo(v); }).catch(() => undefined);
     return () => { live = false; };
   }, []);
@@ -41,7 +48,7 @@ export default function MyReviews() {
           <li key={r.review_id} className="rounded-xl border border-ink-100 bg-surface p-4 text-sm">
             <div className="flex flex-wrap items-center gap-2">
               <span aria-label={`별점 ${r.rating}점`} className="text-amber-500">{"★".repeat(r.rating)}{"☆".repeat(Math.max(0, 5 - r.rating))}</span>
-              <Link href={`/products/${encodeURIComponent(r.product_id)}#reviews`} className="font-mono text-xs underline">{r.product_id}</Link>
+              <Link href={`/products/${encodeURIComponent(r.product_id)}#reviews`} className="text-sm font-semibold underline">{names[r.product_id] ?? r.product_id}</Link>
               <span className="ml-auto text-xs text-ink-500">{dateStr(r.created_at)}</span>
             </div>
             <p className="mt-2 whitespace-pre-wrap text-ink-700">{r.body}</p>

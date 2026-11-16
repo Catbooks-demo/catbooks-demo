@@ -4,6 +4,7 @@ import { Link, usePathname, useRouter } from "@/lib/nav";
 import { NotReady, RequireLogin } from "@/components/shop/bits";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { CLAIM_TERMINAL } from "@/lib/labels";
 import type { MyClaim, MyInquiry, Order } from "@/lib/types";
 
 const MENU: { title: string; items: { href: string; label: string; exact?: boolean }[] }[] = [
@@ -23,7 +24,6 @@ const MENU: { title: string; items: { href: string; label: string; exact?: boole
   ] },
 ];
 
-const CLAIM_DONE = new Set(["completed", "rejected", "not_accepted"]);
 const THREE_MONTHS_MS = 92 * 24 * 3600 * 1000;
 
 function Stat({ label, value }: { label: string; value: string }) {
@@ -51,7 +51,7 @@ function Summary({ buyer }: { buyer: string }) {
 
   const since = Date.now() - THREE_MONTHS_MS;
   const recent = orders?.filter((o) => new Date(o.created_at).getTime() >= since).length;
-  const active = claims?.filter((c) => !CLAIM_DONE.has(c.status)).length;
+  const active = claims?.filter((c) => !CLAIM_TERMINAL.has(c.status)).length;
   const waiting = inquiries?.filter((q) => q.status === "open").length;
   const show = (n: number | undefined) => (n === undefined ? "–" : `${n}건`);
 
