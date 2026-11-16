@@ -1262,6 +1262,33 @@
         "title": "ReturnReceivedIn",
         "type": "object"
       },
+      "ReviewIn": {
+        "properties": {
+          "body": {
+            "maxLength": 1000,
+            "minLength": 10,
+            "title": "Body",
+            "type": "string"
+          },
+          "order_id": {
+            "title": "Order Id",
+            "type": "string"
+          },
+          "rating": {
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Rating",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "order_id",
+          "rating",
+          "body"
+        ],
+        "title": "ReviewIn",
+        "type": "object"
+      },
       "SellerIn": {
         "description": "판매자 입점 신청. 처음 올릴 상품을 같이 받는다 (입점 심사가 상품 가격·수를 본다).",
         "properties": {
@@ -5184,6 +5211,46 @@
         "summary": "Change My Password"
       }
     },
+    "/api/shop/me/reviewable": {
+      "get": {
+        "operationId": "my_reviewable_api_shop_me_reviewable_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response My Reviewable Api Shop Me Reviewable Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "My Reviewable"
+      }
+    },
+    "/api/shop/me/reviews": {
+      "get": {
+        "operationId": "my_reviews_api_shop_me_reviews_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response My Reviews Api Shop Me Reviews Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "My Reviews"
+      }
+    },
     "/api/shop/metric-series": {
       "get": {
         "operationId": "metric_series_api_shop_metric_series_get",
@@ -6226,6 +6293,121 @@
           }
         },
         "summary": "Update Product"
+      }
+    },
+    "/api/shop/products/{product_id}/reviews": {
+      "get": {
+        "description": "공개 후기 목록과 요약. 구매자 ID·이름 없이 `author_label`만 싣는다.",
+        "operationId": "list_reviews_api_shop_products__product_id__reviews_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Reviews Api Shop Products  Product Id  Reviews Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Reviews"
+      },
+      "post": {
+        "description": "배송이 끝난 내 주문의 상품에 후기를 쓴다(구매자 토큰). 주문·상품마다 한 번.",
+        "operationId": "post_review_api_shop_products__product_id__reviews_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Review Api Shop Products  Product Id  Reviews Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Review"
       }
     },
     "/api/shop/sales-export": {

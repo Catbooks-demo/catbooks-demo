@@ -243,9 +243,9 @@ def _run_step(conn, step: _Step, params: dict[str, object]) -> int:
         "ELSE COALESCE(amount_sum, 0) + COALESCE(excluded.amount_sum, 0) END",
         params,
     )
-    if step.kind == "buyers":  # 구매자 행이 사라지면 그 로그인 토큰도 같이 지운다
+    if step.kind == "buyers":  # 구매자 행이 사라지면 그 로그인 토큰·후기도 같이 지운다
         # (만료 삭제는 계정 있는 구매자를 고르지 않는다. 계정은 운영자 삭제 집행에서만 지운다)
-        for table in ("sessions", "accounts"):
+        for table in ("sessions", "accounts", "reviews"):
             conn.execute(
                 f"DELETE FROM {table} WHERE buyer_id IN "  # noqa: S608
                 f"(SELECT t.buyer_id FROM {step.source} WHERE {step.where})",

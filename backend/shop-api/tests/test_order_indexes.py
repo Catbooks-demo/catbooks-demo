@@ -36,6 +36,8 @@ LATER = (
     "idx_claim_inbox_buyer",
     "idx_idea_inbox_unread",  # 아이디어함(읽어 가지 않은 아이디어)
     "idx_sessions_buyer",  # 로그인 토큰(구매자별)
+    "idx_reviews_product",  # 구매 후기(상품별 최신순)
+    "idx_reviews_buyer",
 )
 
 

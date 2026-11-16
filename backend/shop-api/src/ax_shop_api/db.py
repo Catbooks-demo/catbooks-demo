@@ -133,6 +133,14 @@ CREATE TABLE IF NOT EXISTS idea_inbox (
   created_at TEXT NOT NULL, synced_at TEXT, support_idea_id TEXT, outcome TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_idea_inbox_unread ON idea_inbox(seq) WHERE synced_at IS NULL;
+-- 구매 후기: 배송 완료된 본인 주문의 상품마다 한 번(reviews.py)
+CREATE TABLE IF NOT EXISTS reviews (
+  review_id TEXT PRIMARY KEY, order_id TEXT NOT NULL, product_id TEXT NOT NULL,
+  buyer_id TEXT NOT NULL, rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+  body TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(order_id, product_id)
+);
+CREATE INDEX IF NOT EXISTS idx_reviews_product ON reviews(product_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_reviews_buyer ON reviews(buyer_id);
 CREATE TABLE IF NOT EXISTS retention_daily_stats (
   stat_date TEXT NOT NULL, kind TEXT NOT NULL, rows_count INTEGER NOT NULL,
   amount_sum INTEGER, tenant_id TEXT NOT NULL,

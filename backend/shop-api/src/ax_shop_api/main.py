@@ -61,6 +61,7 @@ from ax_shop_api.db import Db
 from ax_shop_api.lookups import Lookups
 from ax_shop_api.promotions import Promotions
 from ax_shop_api.refunds import Refunds
+from ax_shop_api.reviews import BODY_MAX, BODY_MIN, Reviews
 from ax_shop_api.sales_export import SalesExport
 from ax_shop_api.seed import seed
 from ax_shop_api.service import (
@@ -244,6 +245,12 @@ class ShippedIn(BaseModel):
 
 class DeliveredIn(BaseModel):
     delivered_at: AwareDatetime | None = None  # 비우면 지금(시연·시드용으로 지난 시각도 가능)
+
+
+class ReviewIn(BaseModel):
+    order_id: str
+    rating: int = Field(ge=1, le=5)
+    body: str = Field(min_length=BODY_MIN, max_length=BODY_MAX)
 
 
 class PaymentIn(BaseModel):
@@ -751,6 +758,7 @@ def create_app(
     sales_export = SalesExport(database)
     refunds = Refunds(database)
     storefront = Storefront(database)
+    review_service = Reviews(database)
     account_service = Accounts(database)
     interval = float(os.getenv("SHOP_MONITOR_INTERVAL_S") or 5)  # 0이면 주기 판정을 끈다
 
@@ -862,6 +870,33 @@ def create_app(
         buyer_id, token = _session_buyer(request)
         account_service.change_password(buyer_id, body.current, body.new, keep_token=token)
         return _ok({"changed": True})
+
+    @app.post("/api/shop/products/{product_id}/reviews", status_code=201)
+    async def post_review(product_id: str, body: ReviewIn, request: Request) -> dict:
+        """배송이 끝난 내 주문의 상품에 후기를 쓴다(구매자 토큰). 주문·상품마다 한 번."""
+        buyer_id = _buyer(request)
+        created = await asyncio.to_thread(
+            review_service.create, buyer_id, product_id, body.order_id, body.rating, body.body
+        )
+        return _ok(created)
+
+    @app.get("/api/shop/products/{product_id}/reviews")
+    async def list_reviews(
+        product_id: str,
+        page: int = Query(default=1, ge=1),
+        size: int = Query(default=10, ge=1, le=50),
+    ) -> dict:
+        """공개 후기 목록과 요약. 구매자 ID·이름 없이 `author_label`만 싣는다."""
+        data, total = await asyncio.to_thread(review_service.for_product, product_id, page, size)
+        return _ok(data, total=total, page=page, size=size)
+
+    @app.get("/api/shop/me/reviews")
+    async def my_reviews(request: Request) -> dict:
+        return _ok(await asyncio.to_thread(review_service.mine, _buyer(request)))
+
+    @app.get("/api/shop/me/reviewable")
+    async def my_reviewable(request: Request) -> dict:
+        return _ok(await asyncio.to_thread(review_service.reviewable, _buyer(request)))
 
     @app.post("/api/shop/auth/signup", status_code=201)
     async def auth_signup(body: SignupIn) -> dict:
