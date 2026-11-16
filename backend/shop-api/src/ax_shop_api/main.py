@@ -1701,6 +1701,19 @@ def create_app(
             raise ShopError("INVALID_QUERY", "from·to에는 시간대가 필요하다")
         return _ok(lookups.sales_summary(from_, to, group_by))
 
+    @app.get("/api/shop/customers/export")
+    def customers_export(
+        cursor: Annotated[str | None, Query(max_length=256)] = None,
+        limit: Annotated[int, Query(ge=1, le=5000)] = 1000,
+        _: str = Depends(_caller(DATA_READERS)),
+    ) -> dict:
+        """가명 ID와 연령대·성별·직업군만 준다(이름·연락처 없음). `data`·`admin` 토큰만.
+
+        프로필을 고친 구매자는 `meta.next_cursor`로 다시 읽을 때 다시 나온다.
+        """
+        data, next_cursor = lookups.customer_export(cursor, limit)
+        return _ok(data, next_cursor=next_cursor)
+
     @app.get("/api/shop/metric-series")
     def metric_series(
         metric: str,

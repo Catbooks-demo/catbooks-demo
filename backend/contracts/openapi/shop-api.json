@@ -4497,6 +4497,84 @@
         "summary": "Get Coupon"
       }
     },
+    "/api/shop/customers/export": {
+      "get": {
+        "description": "가명 ID와 연령대·성별·직업군만 준다(이름·연락처 없음). `data`·`admin` 토큰만.\n\n프로필을 고친 구매자는 `meta.next_cursor`로 다시 읽을 때 다시 나온다.",
+        "operationId": "customers_export_api_shop_customers_export_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 1000,
+              "maximum": 5000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Customers Export Api Shop Customers Export Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Customers Export"
+      }
+    },
     "/api/shop/failed-orders": {
       "get": {
         "description": "결제 실패 주문. `status=timeout`이면 시간 초과(확인·환불 필요) 결제를 같은 모양으로.",
