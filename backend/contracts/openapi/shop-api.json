@@ -4530,9 +4530,9 @@
         "summary": "Get Coupon"
       }
     },
-    "/api/shop/customers/export": {
+    "/api/shop/customers-export": {
       "get": {
-        "description": "가명 ID와 연령대·성별·직업군만 준다(이름·연락처 없음). `data`·`admin` 토큰만.\n\n`meta.next_cursor`는 늘 마지막 줄의 커서(빈 페이지면 받은 커서)이고\n`meta.has_more`가 참인 동안 이어 읽는다.\n끝난 뒤 그 커서를 두었다가 다음에 읽으면 그 뒤에 바뀐 구매자만 나온다.",
+        "description": "고객 내보내기(`ShopCustomersExportResult`). 가명 ID와 값이 있는 속성만, 이름·연락처 없음.\n\n`(change_seq, buyer_id)` 순이다. `next_cursor`를 다음 `cursor`로 넘기고, 받을 것이 없으면\n받은 커서가 그대로 돌아온다. `data`·`admin` 토큰만.",
         "operationId": "customers_export_api_shop_customers_export_get",
         "parameters": [
           {
@@ -4542,7 +4542,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 256,
+                  "maxLength": 200,
                   "type": "string"
                 },
                 {
@@ -4557,8 +4557,8 @@
             "name": "limit",
             "required": false,
             "schema": {
-              "default": 1000,
-              "maximum": 5000,
+              "default": 500,
+              "maximum": 1000,
               "minimum": 1,
               "title": "Limit",
               "type": "integer"

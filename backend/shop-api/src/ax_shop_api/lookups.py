@@ -29,6 +29,11 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from ax_contracts.data_access.shop_customers import (
+    CustomerRow,
+    ShopCustomersExportQuery,
+    ShopCustomersExportResult,
+)
 from ax_contracts.data_access.shop_failed_orders import (
     FailedOrder,
     ShopFailedOrdersQuery,
@@ -175,14 +180,13 @@ class Lookups:
             orders=orders, collected_at=self.now(), truncated=len(rows) > query.limit
         )
 
-    def customer_export(
-        self, cursor: str | None, limit: int
-    ) -> tuple[list[dict[str, Any]], str | None, bool]:
-        """고객 내보내기: 가명 ID(`buyer_id`)와 연령대·성별·직업군뿐이다(이름·연락처 없음).
+    def customer_export(self, query: ShopCustomersExportQuery) -> ShopCustomersExportResult:
+        """고객 내보내기(`shop_customers` 계약): 가명 ID와 값이 있는 연령대·성별·직업군뿐이다.
 
         `(change_seq, buyer_id)`(바뀐 순서, 없으면 0) 순으로 `limit`줄씩 준다. 커서는 마지막 줄의
         그 두 값을 이은 불투명 문자열이고, 프로필을 고친 구매자는 다음 읽기에 다시 나온다.
         """
+        cursor, limit = query.cursor, query.limit
         after: tuple[int, str] | None = None
         if cursor:
             try:
@@ -210,15 +214,14 @@ class Lookups:
         with self.db.tx() as conn:
             rows = conn.execute(sql, params).fetchall()
         page = rows[:limit]
-        data = [
-            {
-                "buyer_id": r["buyer_id"],
-                "age_band": r["age_band"],
-                "gender": r["gender"],
-                "occupation": r["occupation"],
-                "created_at": r["created_at"],
-                "updated_at": r["updated_at"],
-            }
+        customers = [
+            CustomerRow(
+                buyer_id=r["buyer_id"],
+                joined_at=_parse(r["created_at"]),
+                updated_at=_parse(r["updated_at"] or r["created_at"]),
+                attributes={key: r[key] for key in ("age_band", "gender", "occupation") if r[key]},
+                tenant_id=query.tenant_id,
+            )
             for r in page
         ]
         next_cursor = cursor or None  # 빈 페이지면 받은 커서를 그대로 돌려준다
@@ -226,7 +229,13 @@ class Lookups:
             last = page[-1]
             raw = f"{last['seq']}|{last['buyer_id']}"
             next_cursor = base64.urlsafe_b64encode(raw.encode()).decode()
-        return data, next_cursor, len(rows) > limit
+        return ShopCustomersExportResult(
+            customers=customers,
+            next_cursor=next_cursor,
+            has_more=len(rows) > limit,
+            collected_at=self.now(),
+            tenant_id=query.tenant_id,
+        )
 
     def attributed_orders(
         self,
