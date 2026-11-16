@@ -93,12 +93,25 @@ def median_price(prices: list[int]) -> int:
     return math.floor((ordered[middle - 1] + ordered[middle]) / 2 + 0.5)
 
 
+FAILED_ORDER_STATUSES = ("failed", "timeout")  # `/failed-orders?status=`로 고를 수 있는 결제 상태
+
+
 class Lookups:
     def __init__(self, db: Db, now: Callable[[], datetime] = lambda: datetime.now(UTC)) -> None:
         self.db = db
         self.now = now
 
-    def failed_orders(self, query: ShopFailedOrdersQuery) -> ShopFailedOrdersResult:
+    def failed_orders(
+        self, query: ShopFailedOrdersQuery, status: str = "failed"
+    ) -> ShopFailedOrdersResult:
+        """결제 실패(`failed`, 기본) 또는 시간 초과(`timeout`) 결제의 주문.
+
+        시간 초과는 결제사에 요청은 갔는데 응답을 못 받은 결제다. 다시 확인해 정해지기 전까지만
+        `timeout`으로 남는다. `failed_at`은 두 경우 모두 결제를 시도한 시각이다.
+        """
+        if status not in FAILED_ORDER_STATUSES:
+            allowed = "·".join(FAILED_ORDER_STATUSES)
+            raise ShopError("INVALID_QUERY", f"status는 {allowed} 중 하나다")
         if query.to <= query.from_:
             raise ShopError("INVALID_RANGE", "to는 from보다 뒤여야 한다")
         sql = (
@@ -107,10 +120,10 @@ class Lookups:
             "   ON pr.product_id = i.product_id WHERE i.order_id = p.order_id "
             "   ORDER BY i.rowid LIMIT 1) AS category "
             "FROM payments p JOIN orders o ON o.order_id = p.order_id "
-            "WHERE p.status = 'failed' AND p.tenant_id = ? "
+            "WHERE p.status = ? AND p.tenant_id = ? "
             "AND p.created_at >= ? AND p.created_at < ?"
         )
-        args: list[Any] = [query.tenant_id, _iso(query.from_), _iso(query.to)]
+        args: list[Any] = [status, query.tenant_id, _iso(query.from_), _iso(query.to)]
         if query.category:
             sql += " AND category = ?"
             args.append(query.category)

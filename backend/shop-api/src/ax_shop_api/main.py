@@ -1305,10 +1305,12 @@ def create_app(
         to: datetime,
         category: str | None = None,
         limit: Annotated[int, Query(ge=1, le=5000)] = 1000,
+        status: Literal["failed", "timeout"] = "failed",
         _: str = Depends(_caller(DATA_READERS)),
     ) -> dict:
+        """결제 실패 주문. `status=timeout`이면 시간 초과(확인·환불 필요) 결제를 같은 모양으로."""
         query = _query(ShopFailedOrdersQuery, from_=from_, to=to, category=category, limit=limit)
-        result = lookups.failed_orders(query)
+        result = lookups.failed_orders(query, status=status)
         return _ok(result.model_dump(mode="json"))
 
     @app.get("/api/shop/metric-series")

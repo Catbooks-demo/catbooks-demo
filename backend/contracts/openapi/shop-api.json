@@ -3902,6 +3902,7 @@
     },
     "/api/shop/failed-orders": {
       "get": {
+        "description": "결제 실패 주문. `status=timeout`이면 시간 초과(확인·환불 필요) 결제를 같은 모양으로.",
         "operationId": "failed_orders_api_shop_failed_orders_get",
         "parameters": [
           {
@@ -3950,6 +3951,20 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "default": "failed",
+              "enum": [
+                "failed",
+                "timeout"
+              ],
+              "title": "Status",
+              "type": "string"
             }
           },
           {
