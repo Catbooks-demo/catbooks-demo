@@ -91,6 +91,11 @@
   - `GET /api/shop/me` → 사용자 `{buyer_id, display_name, email, age_band, gender, occupation}`.
   - `PATCH /api/shop/me` `{display_name?, age_band?, gender?, occupation?}` → 보낸 칸만 바꾼다(코드값만, null이면 지움, 이름은 지울 수 없다, 칸이 없으면 422). `buyers.updated_at`을 적는다.
   - `POST /api/shop/me/password` `{current, new}` → 현재 비밀번호가 틀리면 401 `INVALID_PASSWORD`, 새 비밀번호는 8~128자(422 `WEAK_PASSWORD`), 비밀번호가 없는 데모 구매자는 409 `NO_PASSWORD`. 바꾸면 **지금 토큰을 뺀 이 구매자의 다른 로그인을 모두 끊는다**.
+- 구매 후기(`reviews` 표, 후기 ID `rev_0001`~):
+  - `POST /api/shop/products/{product_id}/reviews` `{order_id, rating(1~5), body(10~1000자)}` (구매자 토큰) → 201. 본인 주문이고 그 상품이 품목에 있고 `delivered_at`이 있어야 한다(아니면 403 `NOT_REVIEWABLE`). 주문·상품마다 한 번(409 `REVIEW_EXISTS`).
+  - `GET /api/shop/products/{product_id}/reviews?page=&size=` (공개, 최신순, `size` 기본 10·최대 50) → `{data: {summary: {count, avg, by_rating: {"1".."5"}}, items: [{review_id, rating, body, created_at, author_label}]}, meta: {total, page, size}}`. `author_label`은 연령대가 있으면 `10대`~`40대`·`50대 이상`, 없으면 `구매자`. 구매자 ID·이름은 싣지 않는다.
+  - `GET /api/shop/me/reviews` (구매자 토큰) → 내 후기(`product_id`·`order_id` 포함). `GET /api/shop/me/reviewable` → 아직 후기를 안 쓴 배송 완료 품목 `[{order_id, product_id, title}]`.
+  - 보유기간 삭제로 구매자 행이 지워지면 그 구매자의 후기도 같이 지운다.
 
 | 환경변수 | 기본값 | 뜻 |
 | --- | --- | --- |

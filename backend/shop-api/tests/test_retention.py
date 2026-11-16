@@ -517,3 +517,19 @@ def test_cli_refuses_memory_db(
     monkeypatch.setenv("SHOP_DB_PATH", ":memory:")
     assert retention.main(["run", "--apply"]) == 2
     assert capsys.readouterr().out == ""
+
+
+def test_purged_buyer_takes_reviews_along(db: Db) -> None:
+    buyer(db, "buy_9001", ts(200))  # 주문 없음: 지워진다
+    buyer(db, "buy_9002", ts(200))  # 최근 주문이 남아 있어 남는다
+    order(db, "ord_9002", "buy_9002", ts(10))
+    with db.tx() as c:
+        for n, b in ((1, "buy_9001"), (2, "buy_9002")):
+            c.execute(
+                "INSERT INTO reviews VALUES (?, ?, 'prd_0001', ?, 5, '열 글자가 넘는 후기', ?)",
+                (f"rev_{n:04d}", f"ord_{n}", b, ts(150)),
+            )
+    purge_expired(db, NOW, apply=True, config=CFG)
+    with db.tx() as c:
+        left = [r[0] for r in c.execute("SELECT buyer_id FROM reviews")]
+    assert left == ["buy_9002"]
