@@ -957,7 +957,7 @@
       },
       "ProfileIn": {
         "additionalProperties": false,
-        "description": "구매자 프로필. 연령대 구간만 받는다(생년월일·나이는 받지 않는다). null이면 지운다.",
+        "description": "구매자 프로필. 연령대 구간과 성별 코드만 받는다(생년월일·나이·직업은 받지 않는다).\n\n보낸 칸만 바꾼다(안 보낸 칸은 그대로). null이면 지운다. 칸이 하나도 없으면 422다.",
         "properties": {
           "age_band": {
             "anyOf": [
@@ -976,11 +976,24 @@
               }
             ],
             "title": "Age Band"
+          },
+          "gender": {
+            "anyOf": [
+              {
+                "enum": [
+                  "female",
+                  "male",
+                  "no_answer"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gender"
           }
         },
-        "required": [
-          "age_band"
-        ],
         "title": "ProfileIn",
         "type": "object"
       },
@@ -5690,7 +5703,7 @@
         "summary": "Get User"
       },
       "patch": {
-        "description": "연령대 구간(`age_band`)을 정하거나(null이면 지운다). 비밀번호·토큰은 없다(데모).",
+        "description": "연령대 구간(`age_band`)·성별(`gender`)을 정하거나(null이면 지운다). 보낸 칸만 바꾼다.\n\n비밀번호·토큰은 없다(데모).",
         "operationId": "update_profile_api_shop_users__buyer_id__patch",
         "parameters": [
           {

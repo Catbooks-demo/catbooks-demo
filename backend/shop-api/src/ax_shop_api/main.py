@@ -153,11 +153,21 @@ class SessionIn(BaseModel):
 
 
 class ProfileIn(BaseModel):
-    """구매자 프로필. 연령대 구간만 받는다(생년월일·나이는 받지 않는다). null이면 지운다."""
+    """구매자 프로필. 연령대 구간과 성별 코드만 받는다(생년월일·나이·직업은 받지 않는다).
+
+    보낸 칸만 바꾼다(안 보낸 칸은 그대로). null이면 지운다. 칸이 하나도 없으면 422다.
+    """
 
     model_config = {"extra": "forbid"}
 
-    age_band: Literal["10s", "20s", "30s", "40s", "50s_plus"] | None
+    age_band: Literal["10s", "20s", "30s", "40s", "50s_plus"] | None = None
+    gender: Literal["female", "male", "no_answer"] | None = None
+
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> ProfileIn:
+        if not self.model_fields_set:
+            raise ValueError("age_band·gender 중 하나는 보내야 한다")
+        return self
 
 
 class ShippedIn(BaseModel):
@@ -616,8 +626,12 @@ def create_app(
 
     @app.patch("/api/shop/users/{buyer_id}")
     async def update_profile(buyer_id: str, body: ProfileIn) -> dict:
-        """연령대 구간(`age_band`)을 정하거나(null이면 지운다). 비밀번호·토큰은 없다(데모)."""
-        return _ok(storefront.set_age_band(buyer_id, body.age_band))
+        """연령대 구간(`age_band`)·성별(`gender`)을 정하거나(null이면 지운다). 보낸 칸만 바꾼다.
+
+        비밀번호·토큰은 없다(데모).
+        """
+        fields = {name: getattr(body, name) for name in body.model_fields_set}
+        return _ok(storefront.set_profile(buyer_id, fields))
 
     @app.post("/api/shop/sessions")
     async def select_user(body: SessionIn) -> dict:
