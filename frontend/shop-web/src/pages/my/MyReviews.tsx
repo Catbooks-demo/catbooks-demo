@@ -3,6 +3,7 @@ import { Empty, ErrorNote, PageTitle } from "@/components/shop/bits";
 import { api } from "@/lib/api";
 import { dateStr } from "@/lib/format";
 import { Link } from "@/lib/nav";
+import { ReviewForm } from "@/components/shop/ReviewForm";
 import type { MyReview, Reviewable } from "@/lib/types";
 
 export default function MyReviews() {
@@ -10,6 +11,8 @@ export default function MyReviews() {
   const [todo, setTodo] = useState<Reviewable[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -22,7 +25,7 @@ export default function MyReviews() {
     }).catch(() => { if (live) setError("후기를 불러오지 못했어요. 잠시 후 다시 확인해 주세요."); });
     api.reviewable().then((v) => { if (live) setTodo(v); }).catch(() => undefined);
     return () => { live = false; };
-  }, []);
+  }, [tick]);
 
   return (
     <>
@@ -32,12 +35,24 @@ export default function MyReviews() {
         <section className="mb-6 rounded-xl border border-ink-100 bg-surface p-4">
           <h2 className="mb-2 text-sm font-semibold">후기를 쓸 수 있어요</h2>
           <ul className="space-y-1 text-sm">
-            {todo.map((t) => (
-              <li key={`${t.order_id}/${t.product_id}`} className="flex items-center justify-between gap-2">
-                <span className="min-w-0 truncate">{t.title ?? t.product_id}</span>
-                <Link href={`/products/${encodeURIComponent(t.product_id)}#reviews`} className="btn-ghost shrink-0 py-1 text-xs">후기 쓰기</Link>
-              </li>
-            ))}
+            {todo.map((t) => {
+              const key = `${t.order_id}/${t.product_id}`;
+              return (
+                <li key={key}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate">{t.title ?? t.product_id}</span>
+                    <button type="button" className="btn-ghost shrink-0 py-1 text-xs" aria-expanded={open === key} onClick={() => setOpen(open === key ? null : key)}>
+                      {open === key ? "닫기" : "후기 쓰기"}
+                    </button>
+                  </div>
+                  {open === key && (
+                    <div className="mt-2">
+                      <ReviewForm productId={t.product_id} targets={[{ order_id: t.order_id }]} onDone={() => { setOpen(null); setTick((n) => n + 1); }} />
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}

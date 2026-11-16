@@ -1,5 +1,5 @@
 import { SHOP_API_URL } from "./env";
-import type { AgeBand, Banner, CartPrice, Category, ClaimInput, ClaimReceipt, DemoUser, IdeaInput, IdeaReceipt, Inquiry, Me, MeUpdate, MyInquiry, MyReview, Reviewable, SignupInput, InquiryInput, MyClaim, MyIdea, Order, OrderLineInput, PaymentConfig, Product, ProductPage, ProductQuery, Genre, BestProduct, Seller, TossPrepared } from "./types";
+import type { AgeBand, Banner, CartPrice, Category, ClaimInput, ClaimReceipt, DemoUser, IdeaInput, IdeaReceipt, Inquiry, Me, MeUpdate, MyInquiry, MyReview, Reviewable, ReviewPage, ReviewsData, SignupInput, InquiryInput, MyClaim, MyIdea, Order, OrderLineInput, PaymentConfig, Product, ProductPage, ProductQuery, Genre, BestProduct, Seller, TossPrepared } from "./types";
 
 // 판매 사이트 → shop-api(`/api/shop/*`)의 모든 호출은 이 파일 한 곳에 둔다.
 // 성공은 `{data, meta}`, 실패는 `{error: {code, message}}`. 구매자는 이메일로 가입·로그인하고 로그인 토큰을 `Authorization: Bearer`로 보낸다.
@@ -131,6 +131,15 @@ export const api = {
   /** 후기를 쓸 수 있는 주문 품목(배송 완료 + 아직 안 쓴 것). */
   reviewable: () => request<Reviewable[]>("/api/shop/me/reviewable"),
 
+  /** 상품 공개 후기와 요약(토큰 없음). 구매자 이름 없이 `author_label`만 온다. */
+  reviews: async (productId: string, page = 1, size = 10): Promise<ReviewPage> => {
+    const r = await requestFull<ReviewsData>(`/api/shop/products/${encodeURIComponent(productId)}/reviews?page=${page}&size=${size}`);
+    return { ...r.data, total: Number(r.meta.total ?? r.data.items.length), page: Number(r.meta.page ?? page), size: Number(r.meta.size ?? size) };
+  },
+  /** 배송이 끝난 내 주문 상품에 후기를 쓴다. 403 NOT_REVIEWABLE, 409 REVIEW_EXISTS. */
+  writeReview: (productId: string, b: { order_id: string; rating: number; body: string }) =>
+    post<MyReview>(`/api/shop/products/${encodeURIComponent(productId)}/reviews`, b),
+
   /** 1:1 문의 접수(토큰 없음). 주문이 필수이며 shop-api가 고객지원으로 넘긴다. 같은 내용을 10분 안에 다시 보내면 같은 접수로 처리된다. */
   submitInquiry: (b: InquiryInput) => post<Inquiry>("/api/shop/inquiries", b),
 
@@ -169,6 +178,4 @@ export const api = {
   // --- shop-api에 아직 없는 것: ax-backend#385 결과로 연결 --------------------
   // TODO(ax-backend#385): 클레임 환불액 미리보기, 신청 철회·사진 추가
   previewClaim: (_b: ClaimInput) => notReady<never>("환불액 미리보기"),
-  // TODO(ax-backend#385): 후기
-  reviews: (_productId: string) => notReady<never>("구매 후기"),
 };

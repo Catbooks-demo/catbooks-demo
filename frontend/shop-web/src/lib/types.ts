@@ -40,6 +40,11 @@ export interface Inquiry { id: number | string; status: string; order_id: string
 /** `GET /api/shop/inquiries`. `status`: open(답변 대기)·resolved(해결) 등. 고객지원이 처리하기 전에는 `preview`가 비거나 안내문이다. */
 export interface MyInquiry { id: number; subject: string; status: string; order_id: string; updated_at: string; rated?: boolean; can_rate?: boolean; preview?: string; notice?: string; intake_failed?: boolean }
 export interface MyReview { review_id: number | string; product_id: string; order_id: string; rating: number; body: string; created_at: string }
+export interface ReviewsData {
+  summary: { count: number; avg: number; by_rating: Record<string, number> };
+  items: { review_id: string; rating: number; body: string; created_at: string; author_label: string }[];
+}
+export interface ReviewPage extends ReviewsData { total: number; page: number; size: number }
 export interface Reviewable { order_id: string; product_id: string; title: string | null }
 
 // ---------------------------------------------------------------- ideas (고객의 소리)
