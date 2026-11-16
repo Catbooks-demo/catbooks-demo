@@ -884,6 +884,35 @@
         "title": "ProductPatch",
         "type": "object"
       },
+      "ProfileIn": {
+        "additionalProperties": false,
+        "description": "구매자 프로필. 연령대 구간만 받는다(생년월일·나이는 받지 않는다). null이면 지운다.",
+        "properties": {
+          "age_band": {
+            "anyOf": [
+              {
+                "enum": [
+                  "10s",
+                  "20s",
+                  "30s",
+                  "40s",
+                  "50s_plus"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age Band"
+          }
+        },
+        "required": [
+          "age_band"
+        ],
+        "title": "ProfileIn",
+        "type": "object"
+      },
       "RefundIn": {
         "properties": {
           "context_id": {
@@ -5458,6 +5487,56 @@
           }
         },
         "summary": "Get User"
+      },
+      "patch": {
+        "description": "연령대 구간(`age_band`)을 정하거나(null이면 지운다). 비밀번호·토큰은 없다(데모).",
+        "operationId": "update_profile_api_shop_users__buyer_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "buyer_id",
+            "required": true,
+            "schema": {
+              "title": "Buyer Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Profile Api Shop Users  Buyer Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Profile"
       }
     },
     "/health": {

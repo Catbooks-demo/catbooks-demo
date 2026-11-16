@@ -163,6 +163,7 @@ def pending(db: Db, limit: int = READ_LIMIT_DEFAULT) -> tuple[list[dict[str, Any
             " AND (retry_after IS NULL OR retry_after <= ?) ORDER BY attempts, seq LIMIT ?",
             (_now(), limit),
         ).fetchall()
+        bands = intake_common.age_bands(conn, (r["buyer_id"] for r in rows))
         total = conn.execute(
             "SELECT COUNT(*) AS n FROM claim_inbox WHERE synced_at IS NULL AND failed_at IS NULL"
         ).fetchone()["n"]
@@ -176,6 +177,7 @@ def pending(db: Db, limit: int = READ_LIMIT_DEFAULT) -> tuple[list[dict[str, Any
             "key": r["digest"],  # 고객지원이 멱등 키로 쓴다 (접수 번호는 DB를 새로 만들면 겹친다)
             "context_id": r["context_id"],
             "buyer_id": r["buyer_id"],
+            "age_band": bands.get(r["buyer_id"]),  # 구매자 연령대 구간. 모르면 None
             "customer_name": r["customer_name"],
             "order_id": r["order_id"],
             "type": r["claim_type"],

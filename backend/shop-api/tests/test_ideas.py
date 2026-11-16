@@ -99,7 +99,10 @@ def test_support_reads_ideas_oldest_first_and_marks_them(client: TestClient) -> 
     (item,) = res.json()["data"]
     assert res.json()["meta"]["total"] == 2 and item["seq"] == 1
     assert item["text"] == "첫 번째 의견입니다" and item["kind"] == "event"
-    assert set(item) == {"seq", "key", "context_id", "buyer_id", "kind", "text", "created_at"}
+    assert set(item) == {
+        "seq", "key", "context_id", "buyer_id", "age_band", "kind", "text", "created_at",
+    }  # fmt: skip
+    assert item["age_band"] is None  # 연령대 구간을 입력하기 전의 구매자는 모르는 것(None)
     first = {"outcome": "received", "ref": "IDEA-1"}
     done = client.post(f"{READ}/1/synced", json=first, headers=SUPPORT)
     assert done.status_code == 200 and done.json()["data"]["outcome"] == "received"

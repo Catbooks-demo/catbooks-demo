@@ -31,13 +31,24 @@ class Storefront:
         return [self._user(r["buyer_id"]) for r in rows]
 
     def get_user(self, buyer_id: str) -> dict[str, Any]:
+        """한 구매자. `age_band`(연령대 구간)는 목록에는 싣지 않고 이 한 명 조회에만 싣는다."""
         with self.db.tx() as conn:
             found = conn.execute(
-                "SELECT buyer_id FROM buyers WHERE buyer_id = ?", (buyer_id,)
+                "SELECT buyer_id, age_band FROM buyers WHERE buyer_id = ?", (buyer_id,)
             ).fetchone()
         if found is None:
             raise ShopError("BUYER_NOT_FOUND", "구매자를 찾을 수 없다", 404)
-        return self._user(found["buyer_id"])
+        return {**self._user(found["buyer_id"]), "age_band": found["age_band"]}
+
+    def set_age_band(self, buyer_id: str, age_band: str | None) -> dict[str, Any]:
+        """구매자 연령대 구간을 정한다(None이면 지운다). 구간만 저장하고 생년월일은 받지 않는다."""
+        with self.db.tx() as conn:
+            changed = conn.execute(
+                "UPDATE buyers SET age_band = ? WHERE buyer_id = ?", (age_band, buyer_id)
+            ).rowcount
+        if not changed:
+            raise ShopError("BUYER_NOT_FOUND", "구매자를 찾을 수 없다", 404)
+        return self.get_user(buyer_id)
 
     # --- 카테고리 -------------------------------------------------------------
     def list_categories(self) -> list[dict[str, Any]]:

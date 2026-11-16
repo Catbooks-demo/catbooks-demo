@@ -46,7 +46,11 @@ def db() -> Db:
 
 def buyer(db: Db, buyer_id: str, created: str) -> None:
     with db.tx() as c:
-        c.execute("INSERT INTO buyers VALUES (?, ?, NULL, ?)", (buyer_id, TENANT_ID, created))
+        c.execute(
+            "INSERT INTO buyers (buyer_id, tenant_id, context_id, created_at)"
+            " VALUES (?, ?, NULL, ?)",
+            (buyer_id, TENANT_ID, created),
+        )
 
 
 def order(db: Db, order_id: str, buyer_id: str, created: str, amount: int = 1000) -> None:

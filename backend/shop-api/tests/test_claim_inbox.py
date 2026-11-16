@@ -136,9 +136,10 @@ def test_support_reads_new_claims_oldest_first_with_everything_it_needs(
     assert item["seq"] == 1 and item["description"] == SAID  # 읽는 쪽은 설명을 받아 판정한다
     assert item["items"] == [{"order_item_id": "oi_1", "qty": 1}] and item["unsealed"] is True
     assert set(item) == {
-        "seq", "key", "context_id", "buyer_id", "customer_name", "order_id", "type", "reason",
-        "items", "unsealed", "evidence_count", "description", "attempts", "created_at",
+        "seq", "key", "context_id", "buyer_id", "age_band", "customer_name", "order_id", "type",
+        "reason", "items", "unsealed", "evidence_count", "description", "attempts", "created_at",
     }  # fmt: skip
+    assert item["age_band"] is None  # 연령대 구간을 입력하기 전의 구매자는 모르는 것(None)
 
 
 RESULT = {"id": 7, "status": "needs_review", "expected_refund": 21000, "resolution": "확인 필요"}
