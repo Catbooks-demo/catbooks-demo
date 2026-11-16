@@ -1,5 +1,5 @@
 import { SHOP_API_URL } from "./env";
-import type { AgeBand, Banner, CartPrice, Category, ClaimInput, ClaimReceipt, DemoUser, IdeaInput, IdeaReceipt, Inquiry, Me, MeUpdate, MyInquiry, MyReview, Reviewable, SignupInput, InquiryInput, MyClaim, MyIdea, Order, OrderLineInput, PaymentConfig, Product, Seller, TossPrepared } from "./types";
+import type { AgeBand, Banner, CartPrice, Category, ClaimInput, ClaimReceipt, DemoUser, IdeaInput, IdeaReceipt, Inquiry, Me, MeUpdate, MyInquiry, MyReview, Reviewable, SignupInput, InquiryInput, MyClaim, MyIdea, Order, OrderLineInput, PaymentConfig, Product, ProductPage, ProductQuery, Genre, BestProduct, Seller, TossPrepared } from "./types";
 
 // 판매 사이트 → shop-api(`/api/shop/*`)의 모든 호출은 이 파일 한 곳에 둔다.
 // 성공은 `{data, meta}`, 실패는 `{error: {code, message}}`. 구매자는 이메일로 가입·로그인하고 로그인 토큰을 `Authorization: Bearer`로 보낸다.
@@ -48,7 +48,7 @@ export function onSessionCleared(fn: () => void): () => void {
 // ---------------------------------------------------------------- 호출
 interface Body<T> { data?: T; meta?: Record<string, unknown>; error?: { code?: string; message?: string } }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function requestFull<T>(path: string, init?: RequestInit): Promise<{ data: T; meta: Record<string, unknown> }> {
   let res: Response;
   const token = storedToken();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -64,7 +64,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (res.status === 401 && (code === "UNAUTHORIZED" || code === "LOGIN_REQUIRED")) { storeToken(null); sessionListeners.forEach((fn) => fn()); }
     throw new ApiError(body?.error?.message ?? `요청 실패 (${res.status})`, res.status, body?.error?.code);
   }
-  return body.data;
+  return { data: body.data, meta: body.meta ?? {} };
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  return (await requestFull<T>(path, init)).data;
 }
 
 const post = <T>(path: string, body?: unknown) =>
@@ -79,6 +83,25 @@ export const api = {
   // --- shop-api에 있는 것 -------------------------------------------------
   products: (p: { category_code?: string } = {}) =>
     request<Product[]>(`/api/shop/products${p.category_code ? `?category_code=${encodeURIComponent(p.category_code)}` : ""}`),
+  /** 서버 검색·정렬·페이지. `page`를 보내므로 `{data, meta}` 모양으로 온다. */
+  productsPage: async (p: ProductQuery): Promise<ProductPage> => {
+    const sp = new URLSearchParams();
+    if (p.q) sp.set("q", p.q);
+    if (p.genre) sp.set("genre", p.genre);
+    if (p.sort) sp.set("sort", p.sort);
+    sp.set("page", String(p.page ?? 1));
+    sp.set("size", String(p.size ?? 24));
+    const r = await requestFull<Product[]>(`/api/shop/products?${sp.toString()}`);
+    return { items: r.data, total: Number(r.meta.total ?? r.data.length), page: Number(r.meta.page ?? 1), size: Number(r.meta.size ?? 24) };
+  },
+  genres: () => request<Genre[]>("/api/shop/genres"),
+  best: (p: { genre?: string; limit?: number; days?: number } = {}) => {
+    const sp = new URLSearchParams();
+    if (p.genre) sp.set("genre", p.genre);
+    if (p.days) sp.set("days", String(p.days));
+    sp.set("limit", String(p.limit ?? 10));
+    return request<BestProduct[]>(`/api/shop/products/best?${sp.toString()}`);
+  },
   product: (id: string) => request<Product>(`/api/shop/products/${encodeURIComponent(id)}`),
   orders: (buyerId: string) => request<Order[]>(`/api/shop/orders?buyer_id=${encodeURIComponent(buyerId)}`),
   order: (id: string) => request<Order>(`/api/shop/orders/${encodeURIComponent(id)}`),

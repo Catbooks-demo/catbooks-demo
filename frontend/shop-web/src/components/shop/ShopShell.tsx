@@ -6,6 +6,7 @@ import { useCart } from "@/lib/cart";
 import { DASHBOARD_WEB_URL } from "@/lib/env";
 import { useCategories } from "@/lib/categories";
 import { IconCart, IconSearch, IconUser } from "../icons";
+import { useGenres } from "@/lib/genres";
 import { NoticeBanners } from "./NoticeBanners";
 import { ThemeToggle } from "../ThemeToggle";
 
@@ -24,6 +25,7 @@ export function ShopShell({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
   const cart = useCart();
   const { categories, label } = useCategories();
+  const { genres } = useGenres();
   const [q, setQ] = useState("");
 
   function search(e: FormEvent) {
@@ -34,6 +36,7 @@ export function ShopShell({ children }: { children: ReactNode }) {
   const nav = [
     { href: "/products", label: "전체 상품" },
     ...categories.map((c) => ({ href: `/products?category=${c.category_code}`, label: label(c.category_code) })),
+    ...genres.filter((g) => g.product_count > 0).map((g) => ({ href: `/products?genre=${g.genre_code}`, label: g.name })),
     { href: "/support", label: "고객센터" },
   ];
 

@@ -4,7 +4,14 @@
 
 export interface Product {
   product_id: string; seller_id: string; name: string; category_code: string; price: number; stock: number; active: boolean;
+  isbn13?: string | null; author?: string | null; publisher?: string | null; genre_code?: string | null; description?: string | null;
 }
+export interface BestProduct extends Product { sold_qty: number }
+/** `GET /api/shop/genres` */
+export interface Genre { genre_code: string; name: string; product_count: number }
+export type ProductSort = "popular" | "new" | "price_asc" | "price_desc";
+export interface ProductQuery { q?: string; genre?: string; sort?: ProductSort; page?: number; size?: number }
+export interface ProductPage { items: Product[]; total: number; page: number; size: number }
 
 /** `GET /api/shop/sellers`. `name`은 판매자 표시 이름. */
 export interface Seller { seller_id: string; name: string; category_codes: string[] }
