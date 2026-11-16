@@ -112,6 +112,53 @@ def test_failed_orders_lists_only_failed_payments_in_range(client: TestClient, d
     assert result["truncated"] is False and result["collected_at"] is not None
 
 
+def _place_timeout(client: TestClient, db: Db, at: datetime) -> str:
+    """결제사는 승인했는데 응답이 끊긴(시간 초과) 결제 하나. 시각을 `at`으로 맞춘다."""
+    client.post("/api/shop/admin/faults", json={"kind": "lost_response"}, headers=ADMIN)
+    try:
+        return _place(client, db, at, "success")
+    finally:
+        client.delete("/api/shop/admin/faults", headers=ADMIN)
+
+
+def test_failed_orders_default_still_skips_timed_out_payments(
+    client: TestClient, db: Db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PAYMENT_PROVIDER", "fake")
+    failed = _place(client, db, T0 + timedelta(minutes=1), "failure")
+    _place_timeout(client, db, T0 + timedelta(minutes=2))
+    result = client.get("/api/shop/failed-orders", params=_range(), headers=DATA).json()["data"]
+    assert [order["order_id"] for order in result["orders"]] == [failed]
+    same = client.get(
+        "/api/shop/failed-orders", params=_range() | {"status": "failed"}, headers=DATA
+    ).json()["data"]
+    assert same["orders"] == result["orders"]
+
+
+def test_failed_orders_lists_timed_out_payments_when_asked(
+    client: TestClient, db: Db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PAYMENT_PROVIDER", "fake")
+    _place(client, db, T0 + timedelta(minutes=1), "failure")
+    _place(client, db, T0 + timedelta(minutes=2), "success")
+    timed_out = _place_timeout(client, db, T0 + timedelta(minutes=3))
+    _place_timeout(client, db, T0 + timedelta(minutes=45))  # 구간 밖
+    result = client.get(
+        "/api/shop/failed-orders", params=_range() | {"status": "timeout"}, headers=DATA
+    ).json()["data"]
+    assert [order["order_id"] for order in result["orders"]] == [timed_out]
+    row = result["orders"][0]
+    assert row["reason"] == "PG_TIMEOUT" and row["amount"] > 0
+    assert row["failed_at"].startswith("2026-10-22T06:03:00")
+
+
+def test_failed_orders_rejects_an_unknown_status(client: TestClient) -> None:
+    response = client.get(
+        "/api/shop/failed-orders", params=_range() | {"status": "succeeded"}, headers=DATA
+    )
+    assert response.status_code == 422
+
+
 def test_failed_orders_filters_by_category_and_marks_truncation(client: TestClient, db: Db) -> None:
     ids = [_place(client, db, T0 + timedelta(minutes=i), "failure") for i in range(3)]
     category = client.get("/api/shop/failed-orders", params=_range(), headers=DATA).json()["data"][
