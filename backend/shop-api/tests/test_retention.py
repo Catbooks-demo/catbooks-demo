@@ -455,6 +455,9 @@ def test_purge_buyer_include_retained_removes_everything_of_that_buyer_only(db: 
         "coupons": 1,
         "outbox_events": 2,
         "buyers": 1,
+        "reviews": 0,
+        "sessions": 0,
+        "accounts": 0,
     }
     with db.tx() as c:
         assert [r[0] for r in c.execute("SELECT buyer_id FROM buyers")] == ["buy_9002"]

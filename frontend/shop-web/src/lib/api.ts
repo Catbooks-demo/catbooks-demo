@@ -67,6 +67,13 @@ async function requestFull<T>(path: string, init?: RequestInit): Promise<{ data:
   return { data: body.data, meta: body.meta ?? {} };
 }
 
+/** 가입·로그인·비밀번호 확인 오류 문구. 시도 제한(429)만 화면 문구로 바꾸고 나머지는 서버 문구 그대로다. */
+export function authErrorMessage(err: unknown): string {
+  const e = err as ApiError;
+  if (e?.code === "RATE_LIMITED" || e?.status === 429) return "시도가 너무 많아요. 잠시 후 다시 시도해 주세요.";
+  return (err as Error).message;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await requestFull<T>(path, init)).data;
 }
@@ -152,8 +159,8 @@ export const api = {
   /** 내 아이디어 내역: 번호·종류·앞부분 30자·처리 상태·안내 한 줄. 판매 서버에 저장된 것을 읽는다(원문은 없다). */
   myIdeas: (buyerId: string) => request<MyIdea[]>(`/api/shop/ideas?buyer_id=${encodeURIComponent(buyerId)}`),
 
-  /** 데모 구매자 목록(가명 ID + 표시용 이름). 적립금은 없다. */
-  demoUsers: () => request<DemoUser[]>("/api/shop/users"),
+  /** 시험용 구매자 목록(`SHOP_DEMO_LOGIN=on`일 때만, 토큰 없이). 계정 없는 옛 데모 구매자의 가명 ID + 표시용 이름만. */
+  demoUsers: () => request<DemoUser[]>("/api/shop/auth/demo-buyers"),
   demoUser: (buyerId: string) => request<DemoUser>(`/api/shop/users/${encodeURIComponent(buyerId)}`),
   /** 시험용 구매자 로그인(`SHOP_DEMO_LOGIN=on`일 때만). 옛 데모 구매자에게 비밀번호 없이 토큰을 준다. */
   demoLogin: (buyerId: string) => post<{ token: string; user: Me }>("/api/shop/auth/demo-login", { buyer_id: buyerId }),
@@ -167,6 +174,8 @@ export const api = {
   updateMe: (b: MeUpdate) => patch<Me>("/api/shop/me", b),
   /** 바꾸면 이 기기를 뺀 다른 로그인은 모두 끊긴다. */
   changePassword: (current: string, next: string) => post<{ changed: boolean }>("/api/shop/me/password", { current, new: next }),
+  /** 회원 탈퇴. 비밀번호가 틀리면 403 INVALID_PASSWORD. 회원정보·후기·로그인은 바로 지워지고 주문·클레임 기록은 남는다. */
+  withdraw: (password: string) => post<{ withdrawn: boolean }>("/api/shop/me/withdraw", { password }),
   /** 연령대 구간을 정한다(null이면 지운다). 비밀번호·토큰은 없다(데모). */
   setAgeBand: (buyerId: string, ageBand: AgeBand | null) =>
     patch<DemoUser>(`/api/shop/users/${encodeURIComponent(buyerId)}`, { age_band: ageBand }),

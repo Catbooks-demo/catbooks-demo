@@ -15,9 +15,13 @@ import os
 import re
 import secrets
 import sqlite3
+import time
+from collections import defaultdict, deque
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from ax_shop_api import retention
 from ax_shop_api.db import TENANT_ID, Db
 from ax_shop_api.inquiries import BUYER_ID
 from ax_shop_api.service import ShopError
@@ -33,6 +37,13 @@ EMAIL_MAX = 254
 SESSION_DAYS_DEFAULT = 30
 ENV_SESSION_DAYS = "SHOP_SESSION_DAYS"
 ENV_DEMO_LOGIN = "SHOP_DEMO_LOGIN"
+DEMO_BUYERS_MAX = 60
+
+# 가입·로그인 시도 제한(창 안의 시도 수, 창 길이 초). 비밀번호 맞히기와 scrypt 부하를 막는다.
+LOGIN_PER_EMAIL = (10, 300.0)
+LOGIN_PER_IP = (30, 300.0)
+SIGNUP_PER_IP = (5, 600.0)
+PASSWORD_CHECK_PER_BUYER = (10, 300.0)
 
 _SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2**14, 8, 1
 _SALT_BYTES = 16
@@ -71,6 +82,34 @@ def verify_password(password: str, stored: str) -> bool:
 
 # 없는 이메일로 로그인해도 같은 시간이 걸리도록 비교할 해시(아무 비밀번호와도 맞지 않는다)
 _DUMMY_HASH = hash_password(secrets.token_urlsafe(16))
+
+
+class KeyedRateLimiter:
+    """키(이메일·IP·구매자 ID)별 고정 길이 창 제한. 통과한 시도만 센다.
+
+    `inquiries.InquiryRateLimiter`와 같은 꼴이다.
+    """
+
+    def __init__(
+        self, limit: int, window_s: float, clock: Callable[[], float] = time.monotonic
+    ) -> None:
+        self.limit = limit
+        self.window_s = window_s
+        self._clock = clock
+        self._stamps: dict[str, deque[float]] = defaultdict(deque)
+
+    def hit(self, key: str) -> None:
+        now = self._clock()
+        stamps = self._stamps[key]
+        while stamps and now - stamps[0] >= self.window_s:
+            stamps.popleft()
+        if len(stamps) >= self.limit:
+            raise ShopError("RATE_LIMITED", "시도가 너무 많다. 잠시 후 다시 시도해 달라", 429)
+        stamps.append(now)
+        if len(self._stamps) > 10_000:  # 오래된 키를 치워 메모리가 끝없이 늘지 않게 한다
+            stale = [k for k, v in self._stamps.items() if not v or now - v[-1] >= self.window_s]
+            for old in stale:
+                del self._stamps[old]
 
 
 def _now() -> datetime:
@@ -234,6 +273,24 @@ class Accounts:
             token = self._issue(conn, buyer_id)
             return token, self._user(conn, buyer_id)
 
+    def demo_buyers(self, limit: int = DEMO_BUYERS_MAX) -> list[dict[str, Any]]:
+        """계정이 없는 옛 데모 구매자만(시험용 로그인 화면). 이메일·성별·직업은 싣지 않는다."""
+        with self.db.tx() as conn:
+            rows = conn.execute(
+                "SELECT b.buyer_id, b.age_band FROM buyers b WHERE NOT EXISTS "
+                "(SELECT 1 FROM accounts a WHERE a.buyer_id = b.buyer_id) "
+                "ORDER BY b.buyer_id LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                "buyer_id": r["buyer_id"],
+                "display_name": f"데모 구매자 {r['buyer_id'].rsplit('_', 1)[-1]}",
+                "age_band": r["age_band"],
+            }
+            for r in rows
+        ]
+
     def logout(self, token: str) -> None:
         with self.db.tx() as conn:
             conn.execute("DELETE FROM sessions WHERE token_hash = ?", (_token_hash(token),))
@@ -321,3 +378,18 @@ class Accounts:
             conn.execute(
                 "DELETE FROM sessions WHERE buyer_id = ? AND token_hash != ?", (buyer_id, keep)
             )
+
+    def withdraw(self, buyer_id: str, password: str) -> None:
+        """회원 탈퇴. 비밀번호가 맞으면(틀리면 403) 계정·후기·로그인 토큰을 지우고 구매자 속성을
+        비운다(`retention.remove_account`). 주문·클레임 기록은 법정 보존이라 남는다.
+        """
+        with self.db.tx() as conn:
+            row = conn.execute(
+                "SELECT password_hash FROM accounts WHERE buyer_id = ?", (buyer_id,)
+            ).fetchone()
+        if row is None:
+            raise ShopError("NO_PASSWORD", "비밀번호가 없는 계정이다", 409)
+        if not verify_password(password, row["password_hash"]):
+            raise ShopError("INVALID_PASSWORD", "비밀번호가 맞지 않다", 403)
+        with self.db.tx() as conn:
+            retention.remove_account(conn, buyer_id)

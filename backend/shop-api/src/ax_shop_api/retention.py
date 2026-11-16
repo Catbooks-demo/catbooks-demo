@@ -5,8 +5,9 @@
 - 시드 데모 구매자(`seed.SEED_BUYER_IDS`)와 그 구매자의 거래 기록은 지우지 않는다.
 - 지우기 전에 개인 식별 정보가 없는 일별 집계(`retention_daily_stats`)만 남긴다.
 - 기본은 dry-run(건수만 센다). 실제 삭제(`apply`)는 사람이 켠다. 보고서·로그에는 건수만 담는다.
-- 외부에 열린 삭제 경로는 만들지 않는다. 사람 승인 뒤 운영자가 CLI로만 실행한다
-  (`python -m ax_shop_api.retention`).
+- 다른 사람의 기록을 지우는 외부 경로는 만들지 않는다. 삭제 요청은 사람 승인 뒤 운영자가 CLI로만
+  실행한다(`python -m ax_shop_api.retention`). 회원 본인의 탈퇴(`POST /api/shop/me/withdraw`)만
+  비밀번호를 확인한 뒤 같은 계정 삭제(`remove_account`)를 쓴다(주문 기록은 남는다).
 """
 
 from __future__ import annotations
@@ -51,6 +52,9 @@ KINDS = (
     "outbox_events",
     "buyers",
 )
+# 삭제 요청·회원 탈퇴 때 구매자 행이 남더라도 늘 지우는 계정 쪽 기록(건수 키). 이 표들에는
+# tenant_id가 없어 일별 집계(retention_daily_stats)는 남기지 않는다.
+ACCOUNT_KINDS = ("reviews", "sessions", "accounts")
 
 
 def _days(name: str, default: int) -> int:
@@ -91,7 +95,8 @@ class RetentionReport:
 
     def summary(self) -> str:
         mode = "apply" if self.applied else "dry-run"
-        parts = " ".join(f"{kind}={self.counts.get(kind, 0)}" for kind in KINDS)
+        kinds = KINDS + tuple(k for k in ACCOUNT_KINDS if k in self.counts)
+        parts = " ".join(f"{kind}={self.counts.get(kind, 0)}" for kind in kinds)
         return f"retention {mode}: {parts} total={self.total}"
 
 
@@ -259,10 +264,40 @@ def _run_step(conn, step: _Step, params: dict[str, object]) -> int:
     return cursor.rowcount
 
 
-def _execute(db: Db, steps: list[_Step], params: dict[str, object], apply: bool) -> RetentionReport:
+def remove_account(conn, buyer_id: str, now: datetime | None = None) -> dict[str, int]:
+    """한 구매자의 계정 쪽 기록을 지운다(삭제 요청 집행·회원 탈퇴가 같이 쓴다).
+
+    후기·로그인 토큰·계정(이메일·비밀번호 해시·표시 이름)을 지우고, 구매자 행이 법정 보존
+    주문 때문에 남더라도 연령대·성별·직업군을 비우고 `change_seq`를 올린다(고객 내보내기가
+    바뀐 것을 읽는다). 주문·결제·환불·반품·쿠폰은 건드리지 않는다. 지운 건수를 돌려준다.
+    """
+    counts = {
+        table: conn.execute(
+            f"DELETE FROM {table} WHERE buyer_id = ?",  # noqa: S608 (상수 표 이름)
+            (buyer_id,),
+        ).rowcount
+        for table in ACCOUNT_KINDS
+    }
+    conn.execute(
+        "UPDATE buyers SET age_band = NULL, gender = NULL, occupation = NULL, updated_at = ?, "
+        "change_seq = (SELECT COALESCE(MAX(change_seq), 0) + 1 FROM buyers) WHERE buyer_id = ?",
+        (_stamp(now or datetime.now(UTC)), buyer_id),
+    )
+    return counts
+
+
+def _execute(
+    db: Db,
+    steps: list[_Step],
+    params: dict[str, object],
+    apply: bool,
+    account_of: str | None = None,
+) -> RetentionReport:
     counts = dict.fromkeys(KINDS, 0)
     try:
         with db.tx() as conn:
+            if account_of is not None:  # 구매자 행이 남든 지워지든 계정 쪽은 먼저 지운다
+                counts.update(remove_account(conn, account_of))
             for step in steps:
                 counts[step.kind] += _run_step(conn, step, params)
             if not apply:
@@ -287,7 +322,11 @@ def purge_expired(
         "c_buyer": _stamp(now - timedelta(days=cfg.buyer_days)),
         "seeds": json.dumps(sorted(SEED_BUYER_IDS)),
     }
-    return _execute(db, _expired_steps(), params, apply)
+    report = _execute(db, _expired_steps(), params, apply)
+    if apply:  # 만료된 로그인 토큰도 치운다(건수 키에는 넣지 않는다)
+        with db.tx() as conn:
+            conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (_stamp(now),))
+    return report
 
 
 def purge_buyer(
@@ -301,6 +340,7 @@ def purge_buyer(
 
     기본은 법정 보존 대상(주문·품목·결제·환불·반품·쿠폰)을 남기고, 발송이 끝난 관련 outbox와
     (남은 주문·쿠폰이 없을 때) 구매자 행만 지운다. `include_retained`면 거래 기록까지 지운다.
+    어느 쪽이든 계정 쪽 기록(`remove_account`: 후기·로그인 토큰·계정, 구매자 속성)은 늘 지운다.
     """
     if buyer_id in SEED_BUYER_IDS:
         raise SeedBuyerError
@@ -308,7 +348,9 @@ def purge_buyer(
         found = conn.execute("SELECT 1 FROM buyers WHERE buyer_id = ?", (buyer_id,)).fetchone()
     if found is None:
         raise BuyerNotFoundError
-    return _execute(db, _buyer_steps(include_retained), {"buyer": buyer_id}, apply)
+    return _execute(
+        db, _buyer_steps(include_retained), {"buyer": buyer_id}, apply, account_of=buyer_id
+    )
 
 
 # --- 백그라운드(하루 한 번) ---------------------------------------------------

@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { Link, useRouter, useSearchParams } from "@/lib/nav";
 import { ErrorNote, PageTitle } from "@/components/shop/bits";
+import { authErrorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
 /** `?next=`는 같은 사이트 안 경로(`/`로 시작하고 `//`나 `/\`가 아닌 것)만 따른다. */
@@ -26,7 +27,7 @@ export default function LoginPage() {
       await login(email.trim(), password);
       router.replace(next);
     } catch (err) {
-      setError((err as Error).message);
+      setError(authErrorMessage(err));
       setBusy(false);
     }
   }

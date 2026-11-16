@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { ErrorNote, PageTitle } from "@/components/shop/bits";
-import { api } from "@/lib/api";
+import { api, authErrorMessage } from "@/lib/api";
 
 export default function MyPassword() {
   const [current, setCurrent] = useState("");
@@ -22,7 +22,7 @@ export default function MyPassword() {
       setCurrent(""); setNext(""); setAgain("");
       setNote("비밀번호를 바꿨어요. 다른 기기의 로그인은 모두 풀렸어요.");
     } catch (err) {
-      setError((err as Error).message);
+      setError(authErrorMessage(err));
     } finally {
       setBusy(false);
     }
