@@ -168,6 +168,8 @@ _ADDED_COLUMNS = {
         # 직업군 코드(선택). 비어 있으면 모르는 것이다
         ("occupation", "TEXT"),
         ("updated_at", "TEXT"),
+        # 바뀐 순서(가입·프로필 변경 때마다 최댓값+1). 고객 내보내기가 이 순서로 읽는다. 비면 0
+        ("change_seq", "INTEGER"),
     ),
     # 책 정보(선택). 외부 도서 자료와 ISBN으로 정확히 잇는 데 쓴다. 비어 있으면 모르는 것이다
     "products": (("isbn13", "TEXT"), ("author", "TEXT"), ("publisher", "TEXT")),

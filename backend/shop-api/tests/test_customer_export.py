@@ -58,15 +58,11 @@ def test_export_has_no_names_or_contacts(client: TestClient) -> None:
     assert EMAIL not in res.text and "고양이" not in res.text
 
 
-def test_export_pages_by_cursor_and_returns_changes(client: TestClient, db: Db) -> None:
+def test_export_pages_by_cursor_and_returns_changes(client: TestClient) -> None:
     token = _signup(client)
-    # 같은 초 안의 변경이 커서에 가려지지 않도록 모든 구매자를 옛 시각으로 둔다
-    with db.tx() as conn:
-        conn.execute("UPDATE buyers SET created_at = '2026-01-01T00:00:00Z', updated_at = NULL")
 
     rows: list[dict] = []
     cursor: str | None = None
-    last_cursor = ""
     while True:
         params: dict[str, object] = {"limit": 10}
         if cursor:
@@ -79,7 +75,7 @@ def test_export_pages_by_cursor_and_returns_changes(client: TestClient, db: Db) 
         last_cursor = cursor
     assert len(rows) == 31 and len({r["buyer_id"] for r in rows}) == 31
 
-    # 끝까지 읽은 뒤 마지막 커서로 다시 읽으면 마지막 페이지의 줄만 남는다. 변경 뒤엔 새로 나온다
+    # 방금 읽은 마지막 줄(가입한 회원)과 같은 초에 바뀌어도 읽은 곳 뒤로 나온다
     patch = client.patch(
         "/api/shop/me",
         json={"occupation": "employee"},
@@ -91,7 +87,27 @@ def test_export_pages_by_cursor_and_returns_changes(client: TestClient, db: Db) 
     ).json()
     changed = [r for r in again["data"] if r["occupation"] == "employee"]
     assert len(changed) == 1 and changed[0]["buyer_id"] == "buy_0031"
-    assert changed[0]["updated_at"] is not None
+
+
+def test_earlier_buyer_changed_after_the_reader_passed_it_reappears(client: TestClient) -> None:
+    """읽은 곳보다 buyer_id가 앞선 구매자가 같은 초에 바뀌어도 다음 읽기에 나온다."""
+    _signup(client)  # buy_0031
+    edge = client.get("/api/shop/customers/export", params={"limit": 30}, headers=DATA).json()
+    cursor = edge["meta"]["next_cursor"]  # buy_0030까지 읽은 곳
+    assert cursor
+    seen = client.get("/api/shop/customers/export", params={"cursor": cursor}, headers=DATA)
+    assert [r["buyer_id"] for r in seen.json()["data"]] == ["buy_0031"]
+
+    res = client.patch(
+        "/api/shop/users/buy_0005",
+        json={"gender": "female"},
+        headers={"Authorization": "Bearer mock:admin"},
+    )
+    assert res.status_code == 200, res.text
+    after = client.get(
+        "/api/shop/customers/export", params={"cursor": cursor}, headers=DATA
+    ).json()["data"]
+    assert [r["buyer_id"] for r in after] == ["buy_0031", "buy_0005"]
 
 
 def test_export_rejects_a_bad_cursor_and_limit(client: TestClient) -> None:

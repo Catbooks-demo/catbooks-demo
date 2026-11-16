@@ -54,7 +54,13 @@ class Storefront:
         if not names:
             raise ShopError("INVALID_PROFILE", "바꿀 칸이 없다", 422)
         # 열 이름은 위 고정 목록에서만 온다. 바꾼 시각(`updated_at`)도 같이 적는다
-        sets = ", ".join([f"{name} = ?" for name in names] + ["updated_at = ?"])
+        sets = ", ".join(
+            [f"{name} = ?" for name in names]
+            + [
+                "updated_at = ?",
+                "change_seq = (SELECT COALESCE(MAX(change_seq), 0) + 1 FROM buyers)",
+            ]
+        )
         now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         with self.db.tx() as conn:
             changed = conn.execute(

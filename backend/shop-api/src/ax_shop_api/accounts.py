@@ -195,7 +195,8 @@ class Accounts:
                 buyer_id = _next_buyer_id(conn)
                 conn.execute(
                     "INSERT INTO buyers(buyer_id, tenant_id, created_at, age_band, gender, "
-                    "occupation, updated_at) VALUES (?,?,?,?,?,?,?)",
+                    "occupation, updated_at, change_seq) VALUES (?,?,?,?,?,?,?,"
+                    "(SELECT COALESCE(MAX(change_seq), 0) + 1 FROM buyers))",
                     (buyer_id, TENANT_ID, now, age_band, gender, occupation, now),
                 )
                 conn.execute(
@@ -283,7 +284,13 @@ class Accounts:
                     raise ShopError(
                         "INVALID_PROFILE", "계정이 없는 구매자는 이름을 바꿀 수 없다", 422
                     )
-            sets = ", ".join([f"{n} = ?" for n in buyer_cols] + ["updated_at = ?"])
+            sets = ", ".join(
+                [f"{n} = ?" for n in buyer_cols]
+                + [
+                    "updated_at = ?",
+                    "change_seq = (SELECT COALESCE(MAX(change_seq), 0) + 1 FROM buyers)",
+                ]
+            )
             conn.execute(  # 열 이름은 위 고정 목록에서만 온다
                 f"UPDATE buyers SET {sets} WHERE buyer_id = ?",  # noqa: S608
                 [fields[n] for n in buyer_cols] + [_stamp(_now()), buyer_id],

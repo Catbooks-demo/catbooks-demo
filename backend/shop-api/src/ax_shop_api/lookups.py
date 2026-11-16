@@ -176,32 +176,32 @@ class Lookups:
     ) -> tuple[list[dict[str, Any]], str | None]:
         """고객 내보내기: 가명 ID(`buyer_id`)와 연령대·성별·직업군뿐이다(이름·연락처 없음).
 
-        `(COALESCE(updated_at, created_at), buyer_id)` 순으로 `limit`줄씩 준다. 커서는 마지막 줄의
+        `(change_seq, buyer_id)`(바뀐 순서, 없으면 0) 순으로 `limit`줄씩 준다. 커서는 마지막 줄의
         그 두 값을 이은 불투명 문자열이고, 프로필을 고친 구매자는 다음 읽기에 다시 나온다.
         """
-        after: tuple[str, str] | None = None
+        after: tuple[int, str] | None = None
         if cursor:
             try:
-                stamp, _, buyer_id = (
-                    base64.urlsafe_b64decode(cursor.encode()).decode().partition("|")
-                )
+                raw = base64.urlsafe_b64decode(cursor.encode()).decode()
+                seq_text, _, buyer_id = raw.partition("|")
+                seq = int(seq_text)
             except (binascii.Error, UnicodeError, ValueError):
-                stamp = buyer_id = ""
-            if not stamp or not buyer_id:
+                seq, buyer_id = 0, ""
+            if not buyer_id:
                 raise ShopError("INVALID_CURSOR", "cursor가 올바르지 않다", 400)
-            after = (stamp, buyer_id)
+            after = (seq, buyer_id)
         sql = (
             "SELECT buyer_id, age_band, gender, occupation, created_at, updated_at, "
-            "COALESCE(updated_at, created_at) AS changed_at FROM buyers WHERE tenant_id = ?"
+            "COALESCE(change_seq, 0) AS seq FROM buyers WHERE tenant_id = ?"
         )
         params: list[Any] = [TENANT_ID]
         if after:
             sql += (
-                " AND (COALESCE(updated_at, created_at) > ?"
-                " OR (COALESCE(updated_at, created_at) = ? AND buyer_id > ?))"
+                " AND (COALESCE(change_seq, 0) > ?"
+                " OR (COALESCE(change_seq, 0) = ? AND buyer_id > ?))"
             )
             params += [after[0], after[0], after[1]]
-        sql += " ORDER BY COALESCE(updated_at, created_at), buyer_id LIMIT ?"
+        sql += " ORDER BY COALESCE(change_seq, 0), buyer_id LIMIT ?"
         params.append(limit + 1)
         with self.db.tx() as conn:
             rows = conn.execute(sql, params).fetchall()
@@ -220,7 +220,7 @@ class Lookups:
         next_cursor = None
         if len(rows) > limit:
             last = page[-1]
-            raw = f"{last['changed_at']}|{last['buyer_id']}"
+            raw = f"{last['seq']}|{last['buyer_id']}"
             next_cursor = base64.urlsafe_b64encode(raw.encode()).decode()
         return data, next_cursor
 
