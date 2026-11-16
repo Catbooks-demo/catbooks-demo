@@ -58,12 +58,14 @@ LISTING_WINDOW = timedelta(hours=24)  # 판매자 정보의 "최근 등록" 구�
 MAX_ATTRIBUTION_DAYS = 31  # 유입 출처 주문 조회의 기간 상한
 # 판매 집계(`sales_summary`)로 묶을 수 있는 기준. 정한 값만 받고 다른 값은 422다
 SALES_GROUPS = ("product", "age_band", "category", "gender", "occupation", "genre")
-# 판매 집계를 시간으로 나누는 단위와 그 구간의 시작일(UTC 날짜)을 만드는 식. 접수 시각(`created_at`,
-# `YYYY-MM-DDTHH:MM:SSZ`)에서 앞쪽 날짜만 쓴다. 주는 월요일에 시작한다
+# 판매 집계를 시간으로 나누는 단위와 구간 시작일을 만드는 식. 구간은 **한국 시간(KST, UTC+9)** 기준:
+# 접수 시각(`created_at`, UTC `YYYY-MM-DDTHH:MM:SSZ`)에 9시간을 더한 한국 날짜로 나눈다.
+# 하루는 한국 날짜 0시, 주는 한국 월요일 0시, 월은 1일 0시에 바뀐다(한국은 일광절약시간이 없다)
+_KST_DATE = "substr(o.created_at, 1, 19), '+9 hours'"
 SALES_PERIODS: dict[str, str] = {
-    "day": "substr(o.created_at, 1, 10)",
-    "week": "date(substr(o.created_at, 1, 10), '-6 days', 'weekday 1')",
-    "month": "substr(o.created_at, 1, 7) || '-01'",
+    "day": f"date({_KST_DATE})",
+    "week": f"date({_KST_DATE}, '-6 days', 'weekday 1')",
+    "month": f"strftime('%Y-%m-01', {_KST_DATE})",
 }
 # 구매자 속성으로 묶는 기준. 이 기준이 든 집계는 작은 묶음의 숫자를 숨긴다(개인이 드러나지 않게)
 SALES_PROFILE_GROUPS = ("age_band", "gender", "occupation")
@@ -359,7 +361,8 @@ class Lookups:
         기간은 `MAX_SALES_SUMMARY_DAYS`일까지다.
 
         `period`(`day`·`week`·`month`, 선택)를 주면 접수 시각을 그 단위로도 나눈다: 줄마다
-        `period_start`(구간 시작 날짜 `YYYY-MM-DD`, UTC 기준, 주는 월요일 시작, 월은 1일)가 붙고
+        `period_start`(구간 시작 날짜 `YYYY-MM-DD`, **한국 시간(KST) 기준**: 하루는 한국 날짜
+        0시, 주는 한국 월요일 0시, 월은 1일 0시에 시작)가 붙고
         구간 → 나머지 기준 순으로 정렬한다. 첫·끝 구간은 `from`·`to` 안의 주문만 센 부분 구간일 수
         있다. 구매자 속성으로 묶었을 때의 숨기기는 (구간, 기준) 한 줄마다 따로 판단한다.
         """

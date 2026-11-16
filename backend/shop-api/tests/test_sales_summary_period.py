@@ -1,6 +1,6 @@
-"""판매 집계의 시간 단위(`period`: 일·주·월): 구간 시작일, 정렬, 부분 구간, 속성 묶음과 숨기기."""
+"""판매 집계의 시간 단위(`period`): 한국 시간 기준 구간 시작일·정렬·부분 구간·숨기기."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,15 +12,16 @@ from ax_shop_api.main import create_app
 URL = "/api/shop/sales-summary"
 SUPPORT = {"Authorization": "Bearer mock:support"}
 PRODUCT = "prd_0001"
-# 2026-11-02는 월요일이다
-MON = datetime(2026, 11, 2, 6, 0, tzinfo=UTC)
-SUN = datetime(2026, 11, 8, 23, 30, tzinfo=UTC)  # 같은 주 일요일
-NEXT_MON = datetime(2026, 11, 9, 0, 10, tzinfo=UTC)  # 다음 주 월요일
-LAST_OCT = datetime(2026, 10, 31, 12, 0, tzinfo=UTC)  # 지난달 토요일
+KST = timezone(timedelta(hours=9))  # 구간은 한국 시간 기준이다(한국은 일광절약시간이 없다)
+# 2026-11-02는 월요일이다 (한국 시간으로 적는다)
+MON = datetime(2026, 11, 2, 15, 0, tzinfo=KST)
+SUN = datetime(2026, 11, 8, 23, 30, tzinfo=KST)  # 같은 주 일요일
+NEXT_MON = datetime(2026, 11, 9, 0, 10, tzinfo=KST)  # 다음 주 월요일 (UTC로는 아직 일요일 15:10)
+LAST_OCT = datetime(2026, 10, 31, 21, 0, tzinfo=KST)  # 지난달 토요일
 
 
 def _iso(moment: datetime) -> str:
-    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @pytest.fixture(autouse=True)
@@ -158,3 +159,30 @@ def test_a_blank_period_means_none(client: TestClient, db: Db) -> None:
     _seed(client, db)
     data = _get(client, period="")
     assert "period" not in data and all("period_start" not in r for r in data["rows"])
+
+
+def test_buckets_change_at_korean_midnight_not_at_utc_midnight(client: TestClient, db: Db) -> None:
+    """UTC 15:00은 한국 0시다. 한국 날짜·월요일·1일 0시에 구간이 바뀐다."""
+    before_day = datetime(2026, 11, 1, 14, 59, 59, tzinfo=UTC)  # 한국 11/1(일) 23:59:59
+    on_day = datetime(2026, 11, 1, 15, 0, 0, tzinfo=UTC)  # 한국 11/2(월) 00:00:00
+    _order(client, db, before_day, 1)
+    _order(client, db, on_day, 2)
+    assert _qty(_get(client, period="day")) == {"2026-11-01": 1, "2026-11-02": 2}
+    assert _qty(_get(client, period="week")) == {"2026-10-26": 1, "2026-11-02": 2}
+
+
+def test_the_month_changes_on_the_first_at_korean_midnight(client: TestClient, db: Db) -> None:
+    before_month = datetime(2026, 10, 31, 14, 59, 59, tzinfo=UTC)  # 한국 10/31 23:59:59
+    on_month = datetime(2026, 10, 31, 15, 0, 0, tzinfo=UTC)  # 한국 11/1 00:00:00
+    _order(client, db, before_month, 4)
+    _order(client, db, on_month, 8)
+    assert _qty(_get(client, period="month")) == {"2026-10-01": 4, "2026-11-01": 8}
+    assert _qty(_get(client, period="day")) == {"2026-10-31": 4, "2026-11-01": 8}
+
+
+def test_period_start_is_the_korean_date_even_when_the_utc_date_differs(
+    client: TestClient, db: Db
+) -> None:
+    late_night_kst = datetime(2026, 11, 3, 16, 30, tzinfo=UTC)  # UTC 11/3, 한국 11/4 01:30
+    _order(client, db, late_night_kst, 3)
+    assert _qty(_get(client, period="day")) == {"2026-11-04": 3}  # UTC 날짜(11/3)가 아니다
