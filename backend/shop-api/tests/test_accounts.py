@@ -134,6 +134,8 @@ def test_terms_must_be_agreed(client: TestClient) -> None:
 def test_optional_attributes_accept_only_codes(client: TestClient) -> None:
     bad = client.post("/api/shop/auth/signup", json=SIGNUP | {"job_group": "학생"})
     assert bad.status_code == 422
+    old = client.post("/api/shop/auth/signup", json=SIGNUP | {"job_group": "office"})
+    assert old.status_code == 422
     good = client.post(
         "/api/shop/auth/signup",
         json=SIGNUP | {"job_group": "student", "age_band": "20s", "gender": "female"},

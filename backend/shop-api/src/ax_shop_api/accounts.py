@@ -24,16 +24,7 @@ from ax_shop_api.service import ShopError
 
 AGE_BANDS: tuple[str, ...] = ("10s", "20s", "30s", "40s", "50s_plus")
 GENDERS: tuple[str, ...] = ("female", "male", "no_answer")
-JOB_GROUPS: tuple[str, ...] = (
-    "student",
-    "office",
-    "professional",
-    "self_employed",
-    "freelancer",
-    "homemaker",
-    "other",
-    "no_answer",
-)
+JOB_GROUPS: tuple[str, ...] = ("student", "employee", "self_employed", "other", "no_answer")
 
 PASSWORD_MIN = 8
 PASSWORD_MAX = 128

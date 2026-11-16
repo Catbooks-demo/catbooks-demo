@@ -1288,11 +1288,8 @@
               {
                 "enum": [
                   "student",
-                  "office",
-                  "professional",
+                  "employee",
                   "self_employed",
-                  "freelancer",
-                  "homemaker",
                   "other",
                   "no_answer"
                 ],

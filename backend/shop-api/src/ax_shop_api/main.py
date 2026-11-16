@@ -184,19 +184,7 @@ class SignupIn(BaseModel):
     agree_privacy: Literal[True]
     age_band: Literal["10s", "20s", "30s", "40s", "50s_plus"] | None = None
     gender: Literal["female", "male", "no_answer"] | None = None
-    job_group: (
-        Literal[
-            "student",
-            "office",
-            "professional",
-            "self_employed",
-            "freelancer",
-            "homemaker",
-            "other",
-            "no_answer",
-        ]
-        | None
-    ) = None
+    job_group: Literal["student", "employee", "self_employed", "other", "no_answer"] | None = None
 
 
 class LoginIn(BaseModel):
