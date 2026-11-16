@@ -15,6 +15,7 @@ function rateErrorText(e: unknown): string {
   if (e.code === "NOT_FOUND" || e.status === 404) return "문의를 찾을 수 없어요.";
   if (e.code === "INVALID_STATE" || e.status === 409) return "이미 평가했거나 아직 평가할 수 없는 문의예요. 화면을 새로 고쳐 확인해 주세요.";
   if (e.status === 0) return "판매 서버에 연결할 수 없어요. 잠시 후 다시 시도해 주세요.";
+  if (e.status >= 500) return "서버 오류로 평가를 남기지 못했어요. 잠시 후 다시 시도해 주세요.";
   return generic;
 }
 

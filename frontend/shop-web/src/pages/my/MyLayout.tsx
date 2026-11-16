@@ -21,6 +21,7 @@ const MENU: { title: string; items: { href: string; label: string; exact?: boole
   { title: "내 정보", items: [
     { href: "/my/profile", label: "회원정보 수정" },
     { href: "/my/password", label: "비밀번호 변경" },
+    { href: "/support?kind=deletion", label: "개인정보 삭제 요청" },
   ] },
 ];
 
