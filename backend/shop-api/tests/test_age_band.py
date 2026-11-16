@@ -103,7 +103,8 @@ def test_the_age_band_survives_an_old_database_without_the_column(tmp_path) -> N
 
     path = str(tmp_path / "old.db")
     first = Db(path)
-    first.tx().__enter__()  # 열을 만든다 (초기화)
+    with first.tx():  # 열을 만든다 (초기화). 트랜잭션은 바로 닫는다
+        pass
     conn = sqlite3.connect(path)
     conn.execute("ALTER TABLE buyers DROP COLUMN age_band")
     conn.commit()
