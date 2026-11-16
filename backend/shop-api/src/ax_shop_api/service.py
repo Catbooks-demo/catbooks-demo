@@ -283,7 +283,8 @@ class Shop:
     @staticmethod
     def _product(row: sqlite3.Row) -> dict[str, Any]:
         keys = ("product_id", "seller_id", "name", "category_code", "price", "stock")
-        return {key: row[key] for key in keys} | {"active": bool(row["active"])}
+        book = ("isbn13", "author", "publisher")  # 책 정보(선택). 비어 있으면 None
+        return {key: row[key] for key in (*keys, *book)} | {"active": bool(row["active"])}
 
     def get_order(self, order_id: str) -> dict[str, Any]:
         with self.db.tx() as conn:
@@ -471,9 +472,12 @@ class Shop:
             for item in products:
                 product_id = self.db.next_id(conn, "product", "prd_")
                 conn.execute(
-                    "INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, ?, ?)",
+                    "INSERT INTO products (product_id, seller_id, name, category_code, price, "
+                    "stock, active, tenant_id, context_id, created_at, updated_at, isbn13, author, "
+                    "publisher) VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, ?, ?, ?, ?, ?)",
                     (product_id, seller_id, item["name"], item["category_code"],
-                     item["price"], item["stock"], TENANT_ID, now, now),
+                     item["price"], item["stock"], TENANT_ID, now, now,
+                     item.get("isbn13"), item.get("author"), item.get("publisher")),
                 )  # fmt: skip
             outbox.enqueue(
                 conn,
@@ -495,7 +499,15 @@ class Shop:
 
     # --- 상품 관리 ----------------------------------------------------------
     def create_product(
-        self, seller_id: str, name: str, category_code: str, price: int, stock: int
+        self,
+        seller_id: str,
+        name: str,
+        category_code: str,
+        price: int,
+        stock: int,
+        isbn13: str | None = None,
+        author: str | None = None,
+        publisher: str | None = None,
     ) -> dict[str, Any]:
         with self.db.tx() as conn:
             if not conn.execute(
@@ -505,13 +517,16 @@ class Shop:
             product_id = self.db.next_id(conn, "product", "prd_")
             now = _now()
             conn.execute(
-                "INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, ?, ?)",
-                (product_id, seller_id, name, category_code, price, stock, TENANT_ID, now, now),
-            )
+                "INSERT INTO products (product_id, seller_id, name, category_code, price, stock, "
+                "active, tenant_id, context_id, created_at, updated_at, isbn13, author, "
+                "publisher) VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, ?, ?, ?, ?, ?)",
+                (product_id, seller_id, name, category_code, price, stock, TENANT_ID, now, now,
+                 isbn13, author, publisher),
+            )  # fmt: skip
         return self.get_product(product_id)
 
     def update_product(self, product_id: str, changes: dict[str, Any]) -> dict[str, Any]:
-        allowed = {"name", "price", "stock", "active"}
+        allowed = {"name", "price", "stock", "active", "isbn13", "author", "publisher"}
         fields = {k: (int(v) if k == "active" else v) for k, v in changes.items() if k in allowed}
         self.get_product(product_id)
         if fields:
