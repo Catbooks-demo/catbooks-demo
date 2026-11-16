@@ -32,12 +32,13 @@ class Storefront:
         return [self._user(r["buyer_id"]) for r in rows]
 
     def get_user(self, buyer_id: str) -> dict[str, Any]:
-        """한 구매자. `age_band`(연령대 구간)·`gender`(성별 코드)는 목록에는 싣지 않고
+        """한 구매자. `age_band`(연령대)·`gender`(성별)는 목록에는 싣지 않고
         이 한 명 조회에만 싣는다. 모르면 None이다.
         """
         with self.db.tx() as conn:
             found = conn.execute(
-                "SELECT buyer_id, age_band, gender FROM buyers WHERE buyer_id = ?", (buyer_id,)
+                "SELECT buyer_id, age_band, gender FROM buyers WHERE buyer_id = ?",
+                (buyer_id,),
             ).fetchone()
         if found is None:
             raise ShopError("BUYER_NOT_FOUND", "구매자를 찾을 수 없다", 404)
@@ -48,7 +49,7 @@ class Storefront:
         }
 
     def set_profile(self, buyer_id: str, fields: dict[str, str | None]) -> dict[str, Any]:
-        """구매자 프로필 칸(`age_band`·`gender`) 중 `fields`에 든 것만 바꾼다(None이면 지운다)."""
+        """프로필 칸(`age_band`·`gender`) 중 `fields`에 든 것만 바꾼다."""
         allowed = ("age_band", "gender")
         names = [name for name in fields if name in allowed]
         if not names:

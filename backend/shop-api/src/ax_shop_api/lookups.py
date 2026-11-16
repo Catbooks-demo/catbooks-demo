@@ -57,7 +57,11 @@ BUCKET = timedelta(minutes=5)
 LISTING_WINDOW = timedelta(hours=24)  # 판매자 정보의 "최근 등록" 구간
 MAX_ATTRIBUTION_DAYS = 31  # 유입 출처 주문 조회의 기간 상한
 # 판매 집계(`sales_summary`)로 묶을 수 있는 기준. 정한 값만 받고 다른 값은 422다
-SALES_GROUPS = ("product", "age_band", "category", "gender")
+SALES_GROUPS = ("product", "age_band", "category", "gender", "occupation", "genre")
+# 구매자 속성으로 묶는 기준. 이 기준이 든 집계는 작은 묶음의 숫자를 숨긴다(개인이 드러나지 않게)
+SALES_PROFILE_GROUPS = ("age_band", "gender", "occupation")
+# 한 줄의 구매자 수가 이보다 적으면 그 줄의 숫자를 숨긴다
+MIN_GROUP_BUYERS = 5
 # 판매 집계의 기간 상한. 넓은 기간은 주문·품목을 통째로 합쳐 서버(연결 하나)를 붙잡는다
 MAX_SALES_SUMMARY_DAYS = 93
 # 전액 환불된 주문: 환불 합계가 주문 금액 이상이다 (`attributed_orders`·쿠폰 귀속 집계와 같은 기준)
@@ -319,12 +323,16 @@ class Lookups:
 
         접수 시각이 `since` 이상 `until` 미만인 주문이다.
 
-        `group_by`는 쉼표로 이은 `product`·`age_band`·`category`·`gender`(정한 값만, 다른 값은 422).
+        `group_by`는 쉼표로 이은 `product`·`age_band`·`category`·`gender`·`occupation`·`genre`
+        (정한 값만, 다른 값은 422). `genre`는 상품 장르 코드(`genre_code`, 모르면 null)로 묶는다.
         한 줄은 기준 값의 조합 하나이고 두 판매 수량을 같이 준다.
         - `gross_qty`: 결제가 끝난 주문의 판매 수량 (클레임 비율의 분모처럼 환불된 주문도 센다)
         - `net_qty`: 그중 전액 환불된 주문을 뺀 수량 (`attributed_orders`와 같은 기준.
           취소된 주문은 결제가 끝난 적이 없어 처음부터 빠진다)
-        `age_band`·`gender`가 null인 줄은 연령대·성별을 모르는 구매자다 (채워 넣지 않는다).
+        `age_band`·`gender`·`occupation`이 null인 줄은 그것을 모르는 구매자다
+        (채워 넣지 않는다). 구매자 속성(`age_band`·`gender`·`occupation`)으로 묶으면 한 줄의
+        구매자가 `MIN_GROUP_BUYERS`명 미만일 때 `order_count`·`gross_qty`·`net_qty`를 null로
+        숨기고 `suppressed`를 true로 한다.
         구매자 ID·이름·결제 수단 같은 개인 식별값은 돌려주지 않는다.
         기간은 `MAX_SALES_SUMMARY_DAYS`일까지다.
         """
@@ -339,14 +347,17 @@ class Lookups:
             "product": ("i.product_id", "product_id"),
             "age_band": ("b.age_band", "age_band"),
             "gender": ("b.gender", "gender"),
+            "occupation": ("b.occupation", "occupation"),
             "category": ("pr.category_code", "category_code"),
+            "genre": ("pr.genre_code", "genre_code"),  # 상품 장르 코드(모르면 null)
         }
         select = ", ".join(f"{columns[g][0]} AS {columns[g][1]}" for g in groups)
         by = ", ".join(columns[g][0] for g in groups)  # 별칭이 아니라 열로 묶는다(상품 표와 겹침)
         joins = ""
-        if "age_band" in groups or "gender" in groups:
+        profile = any(g in SALES_PROFILE_GROUPS for g in groups)
+        if profile:
             joins += " LEFT JOIN buyers b ON b.buyer_id = k.buyer_id"
-        if "category" in groups:
+        if "category" in groups or "genre" in groups:
             joins += " LEFT JOIN products pr ON pr.product_id = i.product_id"
         sql = (  # noqa: S608 - 열 이름은 위 고정 표에서만 온다 (고객 입력이 아니다)
             "WITH k AS (SELECT o.order_id, o.buyer_id, "
@@ -354,6 +365,7 @@ class Lookups:
             "FROM orders o WHERE o.tenant_id = ? AND o.status = 'paid' "
             "AND o.created_at >= ? AND o.created_at < ?) "
             f"SELECT {select}, COUNT(DISTINCT k.order_id) AS order_count, "
+            "COUNT(DISTINCT k.buyer_id) AS buyer_count, "
             "SUM(i.qty) AS gross_qty, "
             "SUM(CASE WHEN k.refunded_all = 0 THEN i.qty ELSE 0 END) AS net_qty "
             f"FROM k JOIN order_items i ON i.order_id = k.order_id{joins} "
@@ -361,11 +373,21 @@ class Lookups:
         )
         with self.db.tx() as conn:
             rows = conn.execute(sql, [TENANT_ID, _iso(since), _iso(until)]).fetchall()
+        out = []
+        for r in rows:
+            row = dict(r)
+            buyers = row.pop("buyer_count")
+            if profile:  # 작은 묶음은 숫자를 숨긴다. 줄은 남기고 `suppressed`로 알린다
+                hide = buyers < MIN_GROUP_BUYERS
+                if hide:
+                    row.update(order_count=None, gross_qty=None, net_qty=None)
+                row["suppressed"] = hide
+            out.append(row)
         return {
             "from": _iso(since),
             "to": _iso(until),
             "group_by": list(groups),
-            "rows": [dict(r) for r in rows],
+            "rows": out,
             "collected_at": _iso(self.now()),
         }
 
