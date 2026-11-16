@@ -11,12 +11,9 @@ RUN npm ci --no-audit --no-fund
 COPY . .
 # 게이트웨이 경로 기준 값. 같은 출처의 상대 경로라 서버 PC 주소가 바뀌어도 다시 빌드하지 않는다.
 ARG VITE_SHOP_API_URL=/shop-api
-# 쇼핑몰 상단 '상담원 콘솔' 링크(AXcellent 화면 주소). 비우면 링크 기본값(localhost)을 쓴다
-ARG VITE_DASHBOARD_WEB_URL=
 # 토스페이먼츠 결제위젯 클라이언트 키(테스트 test_gck_…, 공개 키). 비우면 쇼핑몰은 데모 결제로 동작한다. 시크릿 키는 넣지 않는다
 ARG VITE_TOSS_CLIENT_KEY=
 ENV VITE_SHOP_API_URL=$VITE_SHOP_API_URL \
-    VITE_DASHBOARD_WEB_URL=$VITE_DASHBOARD_WEB_URL \
     VITE_TOSS_CLIENT_KEY=$VITE_TOSS_CLIENT_KEY
 RUN npm run build
 

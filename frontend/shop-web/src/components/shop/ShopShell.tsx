@@ -3,7 +3,6 @@ import { usePathname, useRouter } from "@/lib/nav";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { useAuth } from "@/lib/auth";
 import { useCart } from "@/lib/cart";
-import { DASHBOARD_WEB_URL } from "@/lib/env";
 import { useCategories } from "@/lib/categories";
 import { IconCart, IconSearch, IconUser } from "../icons";
 import { useGenres } from "@/lib/genres";
@@ -56,8 +55,6 @@ export function ShopShell({ children }: { children: ReactNode }) {
               <><Link href="/login" className="hover:text-ink-900">로그인</Link><Link href="/signup" className="hover:text-ink-900">회원가입</Link></>
             )}
             <Link href="/my" className="hover:text-ink-900">마이페이지</Link>
-            {/* 다른 앱(게이트웨이의 /admin/)이라 라우터 Link가 아니라 일반 <a>로 연다. Link는 http(s)가 아니면 쇼핑몰 안 경로로 처리한다 */}
-            <a href={DASHBOARD_WEB_URL} className="hover:text-ink-900">상담원 콘솔</a>
             <ThemeToggle />
           </div>
         </div>
@@ -133,7 +130,6 @@ export function ShopShell({ children }: { children: ReactNode }) {
           <Link href="/terms" className="font-semibold text-ink-700 hover:underline">이용약관</Link>
           <Link href="/buyer-terms" className="font-semibold text-ink-700 hover:underline">구매자 이용약관</Link>
           <Link href="/privacy" className="font-semibold text-ink-700 hover:underline">개인정보처리방침</Link>
-          <a href={DASHBOARD_WEB_URL} className="ml-auto text-ink-500 hover:underline">관리자</a>
         </nav>
       </footer>
     </div>
