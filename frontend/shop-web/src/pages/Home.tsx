@@ -1,6 +1,7 @@
 import { Link } from "@/lib/nav";
 import { useEffect, useState } from "react";
 import { ErrorNote } from "@/components/shop/bits";
+import { won } from "@/lib/format";
 import { ProductCard } from "@/components/shop/ProductCard";
 import { ProductRow } from "@/components/shop/ProductRow";
 import { api } from "@/lib/api";
@@ -18,7 +19,7 @@ export default function Home() {
   useEffect(() => {
     let live = true;
     const fail = (e: Error) => live && setError(e.message);
-    api.best({ limit: 5 }).then((r) => live && setBest(r)).catch(fail);
+    api.best({ limit: 10 }).then((r) => live && setBest(r)).catch(fail);
     api.productsPage({ page: 1, size: 6, sort: "new" }).then((r) => live && setFresh(r.items)).catch(fail);
     // 상품이 있는 장르만 줄을 만든다. 베스트는 팔린 상품만 세므로, 비어 있으면 새로 나온 순으로 채운다.
     api.genres().then(async (genres) => {
@@ -63,31 +64,49 @@ export default function Home() {
         </aside>
       </section>
 
-      <section className="mt-10 grid gap-8 lg:grid-cols-[1fr_1fr]">
-        <div>
-          <div className="mb-4 flex items-end justify-between">
-            <h2 className="text-xl font-bold tracking-tight">베스트 TOP 5</h2>
-            <Link href="/products?sort=popular" className="text-sm text-ink-500 hover:text-ink-900">더 보기 ›</Link>
-          </div>
-          {best && !best.length && <p className="text-sm text-ink-500">아직 집계된 판매가 없어요.</p>}
-          <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3">
-            {(best ?? []).map((p, i) => <ProductCard key={p.product_id} p={p} rank={i + 1} />)}
-          </div>
+      <div className="mt-10 grid gap-8 lg:grid-cols-[1fr_260px]">
+        <div className="min-w-0">
+          <section>
+            <div className="mb-4 flex items-end justify-between">
+              <h2 className="text-xl font-bold tracking-tight">새로 나온 책</h2>
+              <Link href="/products?sort=new" className="text-sm text-ink-500 hover:text-ink-900">더 보기 ›</Link>
+            </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 xl:grid-cols-6">
+              {(fresh ?? []).map((p) => <ProductCard key={p.product_id} p={p} />)}
+            </div>
+          </section>
+          {rows.map(({ genre, items }) => (
+            <ProductRow key={genre.genre_code} title={genre.name} href={`/products?genre=${genre.genre_code}`} items={items} />
+          ))}
         </div>
-        <div>
-          <div className="mb-4 flex items-end justify-between">
-            <h2 className="text-xl font-bold tracking-tight">새로 나온 책</h2>
-            <Link href="/products?sort=new" className="text-sm text-ink-500 hover:text-ink-900">더 보기 ›</Link>
-          </div>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3">
-            {(fresh ?? []).map((p) => <ProductCard key={p.product_id} p={p} />)}
-          </div>
-        </div>
-      </section>
 
-      {rows.map(({ genre, items }) => (
-        <ProductRow key={genre.genre_code} title={genre.name} href={`/products?genre=${genre.genre_code}`} items={items} />
-      ))}
+        {/* 베스트는 옆으로: 표지 없이 순위·제목·저자만 */}
+        <aside className="lg:sticky lg:top-4 lg:self-start">
+          <div className="rounded-2xl border border-ink-100 bg-surface p-4">
+            <div className="mb-3 flex items-end justify-between">
+              <h2 className="text-sm font-bold">베스트셀러</h2>
+              <Link href="/products?sort=popular" className="text-xs text-ink-500 hover:text-ink-900">더 보기 ›</Link>
+            </div>
+            {best && !best.length && <p className="text-xs text-ink-500">아직 집계된 판매가 없어요.</p>}
+            <ol className="space-y-2.5">
+              {(best ?? []).map((p, i) => (
+                <li key={p.product_id}>
+                  <Link href={`/products/${p.product_id}`} className="group flex gap-2.5">
+                    <span className={`w-5 shrink-0 text-right text-sm font-bold ${i < 3 ? "text-brand-600" : "text-ink-400"}`}>{i + 1}</span>
+                    <span className="min-w-0">
+                      <span className="line-clamp-1 break-keep text-sm font-medium group-hover:underline">{p.name}</span>
+                      <span className="flex items-center gap-1.5 text-xs text-ink-500">
+                        {p.author && <span className="truncate">{p.author}</span>}
+                        <span className="shrink-0 tabular-nums">{won(p.price)}</span>
+                      </span>
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </aside>
+      </div>
     </div>
   );
 }
