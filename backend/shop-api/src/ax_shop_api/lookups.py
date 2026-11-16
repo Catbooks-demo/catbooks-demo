@@ -58,6 +58,13 @@ LISTING_WINDOW = timedelta(hours=24)  # 판매자 정보의 "최근 등록" 구�
 MAX_ATTRIBUTION_DAYS = 31  # 유입 출처 주문 조회의 기간 상한
 # 판매 집계(`sales_summary`)로 묶을 수 있는 기준. 정한 값만 받고 다른 값은 422다
 SALES_GROUPS = ("product", "age_band", "category", "gender", "occupation", "genre")
+# 판매 집계를 시간으로 나누는 단위와 그 구간의 시작일(UTC 날짜)을 만드는 식. 접수 시각(`created_at`,
+# `YYYY-MM-DDTHH:MM:SSZ`)에서 앞쪽 날짜만 쓴다. 주는 월요일에 시작한다
+SALES_PERIODS: dict[str, str] = {
+    "day": "substr(o.created_at, 1, 10)",
+    "week": "date(substr(o.created_at, 1, 10), '-6 days', 'weekday 1')",
+    "month": "substr(o.created_at, 1, 7) || '-01'",
+}
 # 구매자 속성으로 묶는 기준. 이 기준이 든 집계는 작은 묶음의 숫자를 숨긴다(개인이 드러나지 않게)
 SALES_PROFILE_GROUPS = ("age_band", "gender", "occupation")
 # 한 줄의 구매자 수가 이보다 적으면 그 줄의 숫자를 숨긴다
@@ -102,6 +109,17 @@ def _parse_group_by(text: str) -> tuple[str, ...]:
             422,
         )
     return groups
+
+
+def _parse_period(period: str | None) -> str | None:
+    """`day`·`week`·`month` 중 하나이거나 없음(None). 다른 값은 422다."""
+    if period is None or period == "":
+        return None
+    if period not in SALES_PERIODS:
+        raise ShopError(
+            "INVALID_PERIOD", f"period는 {', '.join(SALES_PERIODS)} 중 하나를 고른다", 422
+        )
+    return period
 
 
 def _iso(moment: datetime) -> str:
@@ -317,7 +335,11 @@ class Lookups:
         }
 
     def sales_summary(
-        self, since: datetime, until: datetime, group_by: str = "product"
+        self,
+        since: datetime,
+        until: datetime,
+        group_by: str = "product",
+        period: str | None = None,
     ) -> dict[str, Any]:
         """결제가 끝난 주문의 판매 수량을 기준별로 합친다.
 
@@ -335,8 +357,14 @@ class Lookups:
         숨기고 `suppressed`를 true로 한다.
         구매자 ID·이름·결제 수단 같은 개인 식별값은 돌려주지 않는다.
         기간은 `MAX_SALES_SUMMARY_DAYS`일까지다.
+
+        `period`(`day`·`week`·`month`, 선택)를 주면 접수 시각을 그 단위로도 나눈다: 줄마다
+        `period_start`(구간 시작 날짜 `YYYY-MM-DD`, UTC 기준, 주는 월요일 시작, 월은 1일)가 붙고
+        구간 → 나머지 기준 순으로 정렬한다. 첫·끝 구간은 `from`·`to` 안의 주문만 센 부분 구간일 수
+        있다. 구매자 속성으로 묶었을 때의 숨기기는 (구간, 기준) 한 줄마다 따로 판단한다.
         """
         groups = _parse_group_by(group_by)
+        unit = _parse_period(period)
         if until <= since:
             raise ShopError("INVALID_RANGE", "to는 from보다 뒤여야 한다")
         if until - since > timedelta(days=MAX_SALES_SUMMARY_DAYS):
@@ -353,6 +381,10 @@ class Lookups:
         }
         select = ", ".join(f"{columns[g][0]} AS {columns[g][1]}" for g in groups)
         by = ", ".join(columns[g][0] for g in groups)  # 별칭이 아니라 열로 묶는다(상품 표와 겹침)
+        if unit:  # 시간 구간이 맨 앞 기준이다(구간 → 나머지 기준 순)
+            select = f"k.period_start AS period_start, {select}"
+            by = f"k.period_start, {by}"
+        period_col = f", {SALES_PERIODS[unit]} AS period_start" if unit else ""
         joins = ""
         profile = any(g in SALES_PROFILE_GROUPS for g in groups)
         if profile:
@@ -360,7 +392,7 @@ class Lookups:
         if "category" in groups or "genre" in groups:
             joins += " LEFT JOIN products pr ON pr.product_id = i.product_id"
         sql = (  # noqa: S608 - 열 이름은 위 고정 표에서만 온다 (고객 입력이 아니다)
-            "WITH k AS (SELECT o.order_id, o.buyer_id, "
+            f"WITH k AS (SELECT o.order_id, o.buyer_id{period_col}, "
             f"CASE WHEN {_FULLY_REFUNDED} THEN 1 ELSE 0 END AS refunded_all "
             "FROM orders o WHERE o.tenant_id = ? AND o.status = 'paid' "
             "AND o.created_at >= ? AND o.created_at < ?) "
@@ -383,13 +415,16 @@ class Lookups:
                     row.update(order_count=None, gross_qty=None, net_qty=None)
                 row["suppressed"] = hide
             out.append(row)
-        return {
+        result: dict[str, Any] = {
             "from": _iso(since),
             "to": _iso(until),
             "group_by": list(groups),
             "rows": out,
             "collected_at": _iso(self.now()),
         }
+        if unit:  # 단위를 골랐을 때만 싣는다(안 골랐으면 응답 모양은 그대로다)
+            result["period"] = unit
+        return result
 
     def metric_series(self, query: ShopMetricSeriesQuery) -> ShopMetricSeriesResult:
         if query.to <= query.from_:

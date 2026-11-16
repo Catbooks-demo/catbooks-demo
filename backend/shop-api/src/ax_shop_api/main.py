@@ -1708,12 +1708,13 @@ def create_app(
         from_: Annotated[datetime, Query(alias="from")],
         to: datetime,
         group_by: Annotated[str, Query(max_length=64)] = "product",
+        period: Annotated[str | None, Query(max_length=16)] = None,
         _: str = Depends(_caller(SALES_READERS)),
     ) -> dict:
-        """결제가 끝난 주문의 판매 수량을 `group_by`(`product`·`age_band`·`category`)별로 합친다."""
+        """결제가 끝난 주문의 판매 수량을 `group_by` 기준별로, 선택 `period`(일·주·월)로 합친다."""
         if from_.tzinfo is None or to.tzinfo is None:
             raise ShopError("INVALID_QUERY", "from·to에는 시간대가 필요하다")
-        return _ok(lookups.sales_summary(from_, to, group_by))
+        return _ok(lookups.sales_summary(from_, to, group_by, period))
 
     @app.get("/api/shop/customers-export")
     def customers_export(
