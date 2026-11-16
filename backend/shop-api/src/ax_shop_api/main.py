@@ -127,7 +127,7 @@ class OrderLine(BaseModel):
 
 
 class OrderIn(BaseModel):
-    buyer_id: str
+    buyer_id: str | None = None  # 비우면 로그인 토큰의 구매자(보내면 같아야 한다)
     items: list[OrderLine]
     points_used: int = Field(default=0, ge=0)  # 포인트 사용분(원). 품목 금액 비율로 나눠 기록한다
     # 같은 구매자의 같은 키는 주문 하나다. 재시도·중복 전송이 주문을 두 번 만들지 않게 한다
@@ -200,6 +200,30 @@ class DemoLoginIn(BaseModel):
     buyer_id: str = Field(max_length=32)
 
 
+class MeIn(BaseModel):
+    """내 정보 수정. 보낸 칸만 바꾼다(연령대·성별·직업군은 null이면 지운다). 칸이 없으면 422."""
+
+    model_config = {"extra": "forbid"}
+
+    display_name: str | None = Field(default=None, max_length=200)
+    age_band: Literal["10s", "20s", "30s", "40s", "50s_plus"] | None = None
+    gender: Literal["female", "male", "no_answer"] | None = None
+    job_group: Literal["student", "employee", "self_employed", "other", "no_answer"] | None = None
+
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> MeIn:
+        if not self.model_fields_set:
+            raise ValueError("바꿀 칸을 하나는 보내야 한다")
+        return self
+
+
+class PasswordIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    current: str = Field(max_length=1024)
+    new: str = Field(max_length=1024)  # 길이 규칙은 서비스(WEAK_PASSWORD)가 본다
+
+
 class ShippedIn(BaseModel):
     shipped_at: AwareDatetime | None = None  # 비우면 지금(시연·시드용으로 지난 시각도 가능)
 
@@ -266,7 +290,7 @@ class ClaimItemIn(BaseModel):
 class ClaimIn(BaseModel):
     """고객 반품·환불 신청. 금액은 받지 않는다(고객지원이 주문 사실로 계산한다)."""
 
-    buyer_id: str
+    buyer_id: str | None = None  # 비우면 로그인 토큰의 구매자(보내면 같아야 한다)
     customer_name: str = Field(min_length=1, max_length=100)
     order_id: str
     type: Literal["cancel", "return", "exchange"]
@@ -302,7 +326,7 @@ class InquiryIn(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    buyer_id: str
+    buyer_id: str | None = None  # 비우면 로그인 토큰의 구매자(보내면 같아야 한다)
     order_id: str
     subject: str | None = None
     body: str
@@ -362,7 +386,7 @@ class IdeaIn(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    buyer_id: str
+    buyer_id: str | None = None  # 비우면 로그인 토큰의 구매자(보내면 같아야 한다)
     kind: Literal["event", "feature", "improvement", "product", "other"]
     text: str = Field(min_length=1, max_length=500)
 
@@ -372,7 +396,7 @@ class InquiryFeedbackIn(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    buyer_id: str
+    buyer_id: str | None = None  # 비우면 로그인 토큰의 구매자(보내면 같아야 한다)
     rating: int = Field(ge=1, le=5)
     resolved: bool  # 고객이 "문제가 해결됐다"고 답했는지
     comment: str = Field(default="", max_length=300)
@@ -511,35 +535,161 @@ def _is_viewer_token(token: str) -> bool:
     return len(known) >= VIEWER_TOKEN_MIN_LENGTH and hmac.compare_digest(known, token)
 
 
+def _bearer(authorization: str | None) -> str | None:
+    """`Authorization: Bearer <토큰>`의 토큰. 없거나 형식이 다르면 None."""
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+    return token.strip()
+
+
+def _service_requester(request: Request, token: str) -> str | None:
+    """연결 키·에이전트 토큰이면 요청자 이름, 둘 다 아니면 None(열람 토큰은 따로 본다).
+
+    읽기 전용 연결 키로 쓰기를 하거나 사람 토큰을 내면 403이다.
+    """
+    client = _client_key(token)
+    if client is not None:
+        if client.mode == "read" and request.method not in READ_METHODS:
+            raise ShopError("READ_ONLY_KEY", "읽기 전용 연결 키로는 바꿀 수 없다", 403)
+        return client.service
+    if not _agent_tokens_on():
+        return None
+    try:
+        return verify_token(token)  # 요청자는 토큰에서 꺼낸다
+    except PermissionError as error:
+        if _is_human_token(token):
+            raise ShopError("FORBIDDEN", "에이전트 토큰이 필요하다", 403) from error
+        return None
+
+
+def _allows(allowed: set[str], requester: str) -> bool:
+    # 서비스로 나뉜 에이전트(claims 등)는 원래 부서 이름(support)으로도 인정한다
+    return requester in allowed or department_of(requester) in allowed
+
+
 def _caller(allowed: set[str]) -> Callable[..., str]:
     def dependency(request: Request, authorization: str | None = Header(default=None)) -> str:
-        scheme, _, token = (authorization or "").partition(" ")
-        if scheme.lower() != "bearer" or not token.strip():
+        token = _bearer(authorization)
+        if token is None:
             raise ShopError("UNAUTHORIZED", "토큰이 필요하다", 401)
-        if _is_viewer_token(token.strip()):
+        if _is_viewer_token(token):
             if "viewer" not in allowed:
                 raise ShopError("FORBIDDEN", "읽기 전용 토큰으로는 호출할 수 없는 API다", 403)
             return "viewer"
-        client = _client_key(token.strip())
-        if client is not None:
-            if client.mode == "read" and request.method not in READ_METHODS:
-                raise ShopError("READ_ONLY_KEY", "읽기 전용 연결 키로는 바꿀 수 없다", 403)
-            requester = client.service
-        elif not _agent_tokens_on():
-            raise ShopError("UNAUTHORIZED", "연결 키를 검증할 수 없다", 401)
-        else:
-            try:
-                requester = verify_token(token.strip())  # 요청자는 토큰에서 꺼낸다
-            except PermissionError as error:
-                if _is_human_token(token.strip()):
-                    raise ShopError("FORBIDDEN", "에이전트 토큰이 필요하다", 403) from error
-                raise ShopError("UNAUTHORIZED", "토큰을 검증할 수 없다", 401) from error
-        # 서비스로 나뉜 에이전트(claims 등)는 원래 부서 이름(support)으로도 인정한다
-        if requester not in allowed and department_of(requester) not in allowed:
+        requester = _service_requester(request, token)
+        if requester is None:
+            if not _agent_tokens_on():
+                raise ShopError("UNAUTHORIZED", "연결 키를 검증할 수 없다", 401)
+            raise ShopError("UNAUTHORIZED", "토큰을 검증할 수 없다", 401)
+        if not _allows(allowed, requester):
             raise ShopError("FORBIDDEN", "이 API를 호출할 수 없는 요청자다", 403)
         return requester
 
     return dependency
+
+
+# --- 구매자 본인 확인 ---------------------------------------------------------------
+# `SHOP_BUYER_AUTH`: `required`(기본) — 구매자 경로는 로그인 토큰의 구매자만 쓴다.
+#   `legacy` — 토큰이 없으면 요청의 `buyer_id`를 그대로 믿는다(옛 동작. 시험·전환 기간용).
+#   모르는 값은 `required`로 본다(안전한 쪽).
+# `SHOP_ORDERS_PUBLIC_READ`: `on`(기본) — 토큰 없는 주문 조회(`GET /orders`·`/orders/{id}`)는
+#   지금처럼 전체를 준다(AXcellent 재무·고객지원이 이렇게 읽는다). `off`면 토큰이 필요하다.
+BUYER_AUTH_ENV = "SHOP_BUYER_AUTH"
+ORDERS_PUBLIC_READ_ENV = "SHOP_ORDERS_PUBLIC_READ"
+# 구매자를 대신해 구매자 경로를 부를 수 있는 서비스 요청자(가상 주문 스크립트·운영자)
+ACT_FOR_BUYER = {"admin"}
+
+
+def _buyer_auth_legacy() -> bool:
+    return (os.getenv(BUYER_AUTH_ENV) or "").strip().lower() == "legacy"
+
+
+def _orders_public_read() -> bool:
+    return (os.getenv(ORDERS_PUBLIC_READ_ENV) or "on").strip().lower() != "off"
+
+
+@dataclass(frozen=True)
+class Who:
+    """요청한 쪽. `kind`가 `buyer`면 `name`은 구매자 ID, `service`면 요청자 이름이다."""
+
+    kind: Literal["anonymous", "service", "buyer"]
+    name: str | None = None
+
+
+def _identify(request: Request) -> Who:
+    """토큰 판별 순서: 열람 토큰·연결 키·에이전트 토큰(`_caller`와 같은 검증) → 구매자 로그인
+    토큰(`Accounts.resolve`) → 401. 토큰이 없으면 `anonymous`다. 토큰 값은 로그에 남기지 않는다.
+    """
+    token = _bearer(request.headers.get("authorization"))
+    if token is None:
+        return Who("anonymous")
+    if _is_viewer_token(token):
+        return Who("service", "viewer")
+    requester = _service_requester(request, token)
+    if requester is not None:
+        return Who("service", requester)
+    buyer_id = request.app.state.accounts.resolve(token)
+    if buyer_id is not None:
+        return Who("buyer", buyer_id)
+    raise ShopError("UNAUTHORIZED", "토큰을 검증할 수 없다", 401)
+
+
+def _acting_admin(who: Who) -> None:
+    """서비스 요청자가 구매자를 대신할 수 있는지(`admin`만). 아니면 403."""
+    if who.name == "viewer" or not _allows(ACT_FOR_BUYER, who.name or ""):
+        raise ShopError("FORBIDDEN", "구매자를 대신할 수 없는 요청자다", 403)
+
+
+def _buyer(request: Request, claimed: str | None = None) -> str:
+    """구매자 경로의 구매자 ID. `claimed`는 요청 본문·쿼리·경로의 `buyer_id`(없으면 None).
+
+    - 구매자 로그인 토큰: 토큰의 구매자. `claimed`가 다르면 403 `BUYER_MISMATCH`.
+    - `admin` 토큰: `claimed`(없으면 422). 다른 서비스 토큰은 403.
+    - 토큰 없음: `required`면 401 `LOGIN_REQUIRED`, `legacy`면 `claimed`(없으면 422).
+    - 알 수 없는 토큰: 401 `UNAUTHORIZED`.
+    """
+    who = _identify(request)
+    if who.kind == "buyer":
+        if claimed is not None and claimed != who.name:
+            raise ShopError("BUYER_MISMATCH", "로그인한 구매자와 다르다", 403)
+        return str(who.name)
+    if who.kind == "service":
+        _acting_admin(who)
+    elif not _buyer_auth_legacy():
+        raise ShopError("LOGIN_REQUIRED", "로그인이 필요하다", 401)
+    if claimed is None:
+        raise ShopError("BUYER_REQUIRED", "buyer_id가 필요하다", 422)
+    return claimed
+
+
+def _session_buyer(request: Request) -> tuple[str, str]:
+    """`/me` 경로: 구매자 로그인 토큰만 받는다. `(구매자 ID, 토큰)`."""
+    token = _bearer(request.headers.get("authorization"))
+    if token is None:
+        raise ShopError("LOGIN_REQUIRED", "로그인이 필요하다", 401)
+    who = _identify(request)
+    if who.kind != "buyer":
+        raise ShopError("FORBIDDEN", "구매자 로그인 토큰이 필요하다", 403)
+    return str(who.name), token
+
+
+def _order_scope(request: Request) -> str | None:
+    """주문 조회 범위. 구매자 토큰이면 그 구매자 ID, 전체를 볼 수 있으면 None.
+
+    서비스 토큰·연결 키는 전체(열람 토큰은 403). 토큰이 없으면 `SHOP_ORDERS_PUBLIC_READ=on`일 때
+    지금처럼 전체, `off`면 401. 알 수 없는 토큰은 401.
+    """
+    who = _identify(request)
+    if who.kind == "buyer":
+        return who.name
+    if who.kind == "service":
+        if who.name == "viewer":
+            raise ShopError("FORBIDDEN", "읽기 전용 토큰으로는 호출할 수 없는 API다", 403)
+        return None
+    if not _orders_public_read():
+        raise ShopError("UNAUTHORIZED", "토큰이 필요하다", 401)
+    return None
 
 
 def _ok(data: Any, **meta: Any) -> dict[str, Any]:
@@ -649,21 +799,46 @@ def create_app(
         return {"data": {"status": "ok"}, "meta": {}}
 
     @app.get("/api/shop/users")
-    async def list_users() -> dict:
+    async def list_users(request: Request) -> dict:
+        """구매자 목록은 `admin` 토큰만. `legacy`에서 토큰 없이 부르면 옛 동작대로 준다."""
+        authorization = request.headers.get("authorization")
+        if not (_buyer_auth_legacy() and _bearer(authorization) is None):
+            _caller(INJECT_ALLOWED)(request, authorization)
         return _ok(storefront.list_users())
 
     @app.get("/api/shop/users/{buyer_id}")
-    async def get_user(buyer_id: str) -> dict:
-        return _ok(storefront.get_user(buyer_id))
+    async def get_user(buyer_id: str, request: Request) -> dict:
+        """본인(로그인 토큰) 또는 `admin`만."""
+        return _ok(storefront.get_user(_buyer(request, buyer_id)))
 
     @app.patch("/api/shop/users/{buyer_id}")
-    async def update_profile(buyer_id: str, body: ProfileIn) -> dict:
+    async def update_profile(buyer_id: str, body: ProfileIn, request: Request) -> dict:
         """연령대 구간(`age_band`)·성별(`gender`)을 정하거나(null이면 지운다). 보낸 칸만 바꾼다.
 
-        비밀번호·토큰은 없다(데모).
+        본인(로그인 토큰) 또는 `admin`만.
         """
         fields = {name: getattr(body, name) for name in body.model_fields_set}
-        return _ok(storefront.set_profile(buyer_id, fields))
+        return _ok(storefront.set_profile(_buyer(request, buyer_id), fields))
+
+    @app.get("/api/shop/me")
+    async def get_me(request: Request) -> dict:
+        """로그인한 구매자 본인의 정보(구매자 로그인 토큰만)."""
+        buyer_id, _token = _session_buyer(request)
+        return _ok(account_service.profile(buyer_id))
+
+    @app.patch("/api/shop/me")
+    async def update_me(body: MeIn, request: Request) -> dict:
+        """이름·연령대·성별·직업군 중 보낸 칸만 바꾼다(구매자 로그인 토큰만)."""
+        buyer_id, _token = _session_buyer(request)
+        fields = {name: getattr(body, name) for name in body.model_fields_set}
+        return _ok(account_service.update_profile(buyer_id, fields))
+
+    @app.post("/api/shop/me/password")
+    async def change_my_password(body: PasswordIn, request: Request) -> dict:
+        """현재 비밀번호가 맞으면 바꾸고, 이 토큰을 뺀 다른 로그인은 모두 끊는다."""
+        buyer_id, token = _session_buyer(request)
+        account_service.change_password(buyer_id, body.current, body.new, keep_token=token)
+        return _ok({"changed": True})
 
     @app.post("/api/shop/auth/signup", status_code=201)
     async def auth_signup(body: SignupIn) -> dict:
@@ -705,19 +880,36 @@ def create_app(
 
     @app.post("/api/shop/sessions")
     async def select_user(body: SessionIn) -> dict:
-        # 로그인은 "선택"일 뿐이다. 서버는 세션을 저장하지 않고 화면이 buyer_id를 들고 있는다
-        return _ok({"user": storefront.get_user(body.buyer_id)})
+        """데모 사용자 고르기. `SHOP_DEMO_LOGIN=on`일 때만 로그인 토큰을 준다(`{user, token}`).
+
+        꺼져 있으면 404다. 다만 `SHOP_BUYER_AUTH=legacy`에서는 옛 동작(토큰 없이 사용자만)을 둔다
+        (legacy는 어차피 `buyer_id`를 믿으므로 새로 열리는 것이 없다).
+        """
+        if accounts.demo_login_enabled():
+            inquiries.buyer_number(body.buyer_id)
+            token, user = account_service.demo_login(body.buyer_id)
+            return _ok({"user": user, "token": token})
+        if _buyer_auth_legacy():
+            return _ok({"user": storefront.get_user(body.buyer_id)})
+        raise ShopError("NOT_FOUND", "없는 경로다", 404)
 
     @app.get("/api/shop/categories")
     async def list_categories() -> dict:
         return _ok(storefront.list_categories())
 
     @app.post("/api/shop/cart/price")
-    async def price_cart(body: CartPriceIn) -> dict:
+    async def price_cart(body: CartPriceIn, request: Request) -> dict:
+        """쿠폰을 쓸 때만 구매자를 확인한다(`_buyer`). 쿠폰이 없으면 토큰 없이 계산한다."""
         lines = [(i.product_id, i.qty) for i in body.items]
+        buyer_id = body.buyer_id
+        # legacy에서 토큰도 buyer_id도 없으면 옛 동작(400 BUYER_REQUIRED)을 그대로 둔다
+        anonymous = _bearer(request.headers.get("authorization")) is None
+        old_rule = _buyer_auth_legacy() and anonymous and buyer_id is None
+        if body.coupon_id and not old_rule:
+            buyer_id = _buyer(request, buyer_id)
         return _ok(
             storefront.price_cart(
-                lines, body.points_used, body.coupon_id, body.coupon_units, body.buyer_id
+                lines, body.points_used, body.coupon_id, body.coupon_units, buyer_id
             )
         )
 
@@ -762,15 +954,38 @@ def create_app(
     # 동기 핸들러: FastAPI가 스레드에서 돌려 DB를 읽는 동안 이벤트 루프(/health 등)를 막지 않는다.
     # Db는 연결 하나를 RLock으로 감싸고(check_same_thread=False) sqlite는 직렬 모드라
     # 스레드에서 써도 된다
+    def _own_order(request: Request, order_id: str) -> None:
+        """주문 하나를 바꾸는 구매자 경로: 구매자 토큰이면 본인 주문만(남의 주문은 없는 주문과
+        같은 404), `admin`은 누구 주문이든, 토큰이 없으면 `required`에서 401·`legacy`에서 통과.
+        """
+        who = _identify(request)
+        if who.kind == "buyer":
+            if shop.get_order(order_id)["buyer_id"] != who.name:
+                raise ShopError("ORDER_NOT_FOUND", "주문을 찾을 수 없다", 404)
+        elif who.kind == "service":
+            _acting_admin(who)
+        elif not _buyer_auth_legacy():
+            raise ShopError("LOGIN_REQUIRED", "로그인이 필요하다", 401)
+
     @app.get("/api/shop/orders")
     def list_orders(
+        request: Request,
         buyer_id: str | None = None,
         since: str | None = None,
         until: str | None = None,
         limit: Annotated[int, Query(ge=1, le=ORDER_PAGE_MAX)] = ORDER_PAGE_DEFAULT,
         cursor: Annotated[str | None, Query(pattern=r"^[A-Za-z0-9_-]{1,64}$")] = None,
     ) -> dict:
-        """order_id 순 한 페이지. 다음 페이지는 `meta.next_cursor`를 cursor로 준다(끝이면 null)."""
+        """order_id 순 한 페이지. 다음 페이지는 `meta.next_cursor`를 cursor로 준다(끝이면 null).
+
+        구매자 토큰이면 본인 주문만, 서비스 토큰·연결 키면 전체. 토큰이 없으면
+        `SHOP_ORDERS_PUBLIC_READ=on`(기본)일 때 지금처럼 전체, `off`면 401.
+        """
+        scope = _order_scope(request)
+        if scope is not None:
+            if buyer_id is not None and buyer_id != scope:
+                raise ShopError("BUYER_MISMATCH", "로그인한 구매자와 다르다", 403)
+            buyer_id = scope
         orders, next_cursor = shop.list_orders(buyer_id, since, until, limit, cursor)
         return _ok(orders, next_cursor=next_cursor)
 
@@ -789,13 +1004,19 @@ def create_app(
         return _ok(lookups.attributed_orders(from_, to, campaign_id, source, limit))
 
     @app.get("/api/shop/orders/{order_id}")
-    async def get_order(order_id: str) -> dict:
-        return _ok(shop.get_order(order_id))
+    async def get_order(order_id: str, request: Request) -> dict:
+        """구매자 토큰이면 본인 주문만(남의 주문은 404). 그 밖은 주문 목록과 같은 규칙."""
+        scope = _order_scope(request)
+        order = shop.get_order(order_id)
+        if scope is not None and order["buyer_id"] != scope:
+            raise ShopError("ORDER_NOT_FOUND", "주문을 찾을 수 없다", 404)
+        return _ok(order)
 
     @app.post("/api/shop/orders", status_code=201)
-    async def create_order(body: OrderIn, response: Response) -> dict:
+    async def create_order(body: OrderIn, response: Response, request: Request) -> dict:
+        buyer_id = _buyer(request, body.buyer_id)
         order, replayed = shop.place_order(
-            body.buyer_id,
+            buyer_id,
             [(i.product_id, i.qty) for i in body.items],
             body.points_used,
             body.idempotency_key,
@@ -811,7 +1032,8 @@ def create_app(
         return _ok(order, replayed=replayed)
 
     @app.post("/api/shop/orders/{order_id}/payments")
-    async def pay(order_id: str, body: PaymentIn) -> dict:
+    async def pay(order_id: str, body: PaymentIn, request: Request) -> dict:
+        _own_order(request, order_id)
         waited = await shop.gateway.pg_wait()  # 결제사 쪽 지연(시험용)을 실제로 기다린다
         order = shop.pay(order_id, body.method_code, body.simulate, pg_wait_ms=waited)
         shop.evaluate_monitor()
@@ -823,20 +1045,27 @@ def create_app(
         return _ok({"provider": payment_config.provider})  # 키는 담지 않는다
 
     @app.post("/api/shop/orders/{order_id}/payments/toss/prepare")
-    def toss_prepare(order_id: str) -> dict:
+    def toss_prepare(order_id: str, request: Request) -> dict:
         toss.require(toss_payments)
+        _own_order(request, order_id)
         return _ok(shop.toss_prepare(order_id))
 
     @app.post("/api/shop/payments/toss/confirm")
-    async def toss_confirm(body: TossConfirmIn) -> dict:
+    async def toss_confirm(body: TossConfirmIn, request: Request) -> dict:
         payments = toss.require(toss_payments)
+        attempt_order = shop.attempt_order_id(body.toss_order_id)
+        if attempt_order is not None:  # 없는 시도는 아래 승인이 404로 답한다
+            _own_order(request, attempt_order)
+        elif not _buyer_auth_legacy() and _identify(request).kind == "anonymous":
+            raise ShopError("LOGIN_REQUIRED", "로그인이 필요하다", 401)
         order, replayed = await payments.confirm(body.toss_order_id, body.payment_key, body.amount)
         shop.evaluate_monitor()
         await outbox.flush(database)
         return _ok(order, replayed=replayed, toss_order_id=body.toss_order_id)
 
     @app.post("/api/shop/orders/{order_id}/cancel")
-    async def cancel(order_id: str, body: CancelIn) -> dict:
+    async def cancel(order_id: str, body: CancelIn, request: Request) -> dict:
+        _own_order(request, order_id)
         order = shop.cancel(order_id, body.reason_code)
         await outbox.flush(database)
         return _ok(order)
@@ -996,13 +1225,14 @@ def create_app(
 
     # --- 클레임 접수·반품 입고·환불 (#117): 쇼핑몰 → 고객지원 → 재무 경로의 입구 -----------
     @app.post("/api/shop/claims", status_code=201)
-    async def create_claim(body: ClaimIn) -> dict:
+    async def create_claim(body: ClaimIn, request: Request) -> dict:
+        buyer_id = _buyer(request, body.buyer_id)
         order = shop.get_order(body.order_id)
-        if order["buyer_id"] != body.buyer_id:
+        if order["buyer_id"] != buyer_id:
             raise ShopError("BUYER_MISMATCH", "주문의 구매자가 아니다", 403)
         items = [item.model_dump() for item in body.items] if body.items else None
         claim_digest = claim_inbox.digest(
-            body.buyer_id,
+            buyer_id,
             body.order_id,
             body.type,
             body.reason,
@@ -1017,7 +1247,7 @@ def create_app(
             database,
             digest=claim_digest,
             context_id=f"{support_client.CLAIM_CONTEXT_PREFIX}{claim_digest[:12]}",
-            buyer_id=body.buyer_id,
+            buyer_id=buyer_id,
             customer_name=body.customer_name,
             order_id=body.order_id,
             type_=body.type,
@@ -1031,7 +1261,10 @@ def create_app(
 
     # --- 내 클레임 목록·결과: 이 서버에 저장된 신청과 AXcellent가 적어 준 결과 (읽기) ----
     @app.get("/api/shop/claims")
-    async def list_my_claims(buyer_id: str, order_id: str | None = None) -> dict:
+    async def list_my_claims(
+        request: Request, buyer_id: str | None = None, order_id: str | None = None
+    ) -> dict:
+        buyer_id = _buyer(request, buyer_id)
         inquiries.buyer_number(buyer_id)
         if order_id is not None:
             inquiries.check_order_id(order_id)
@@ -1094,17 +1327,18 @@ def create_app(
 
     # --- 고객 문의 접수 (#385 B안): 쇼핑몰 → 고객지원 `create_inquiry` ---------------------
     @app.post("/api/shop/inquiries", status_code=201)
-    async def create_inquiry(body: InquiryIn) -> dict:
-        inquiries.buyer_number(body.buyer_id)  # 형식 확인(저장은 구매자 ID 그대로)
+    async def create_inquiry(body: InquiryIn, request: Request) -> dict:
+        buyer_id = _buyer(request, body.buyer_id)
+        inquiries.buyer_number(buyer_id)  # 형식 확인(저장은 구매자 ID 그대로)
         inquiries.check_order_id(body.order_id)
         subject, message = inquiries.clean_text(body.subject, body.body, body.order_id)
         photos = inquiries.clean_images([i.model_dump() for i in body.images])
         order = shop.get_order(body.order_id)  # 읽기만 한다. 없으면 404
-        if order["buyer_id"] != body.buyer_id:  # 남의 주문도 같은 404로 답한다
+        if order["buyer_id"] != buyer_id:  # 남의 주문도 같은 404로 답한다
             raise ShopError("ORDER_NOT_FOUND", "주문을 찾을 수 없다", 404)
-        inquiry_limiter.hit(body.buyer_id)
+        inquiry_limiter.hit(buyer_id)
         digest = inquiries.digest(
-            body.buyer_id, body.order_id, subject, message, images_key=inquiries.images_key(photos)
+            buyer_id, body.order_id, subject, message, images_key=inquiries.images_key(photos)
         )
         context_id = (
             f"{support_client.CLAIM_CONTEXT_PREFIX}{digest[:12]}"  # 같은 접수는 같은 사건·키
@@ -1115,8 +1349,8 @@ def create_app(
             database,
             digest=digest,
             context_id=context_id,
-            buyer_id=body.buyer_id,
-            customer_name=storefront.get_user(body.buyer_id)["display_name"],
+            buyer_id=buyer_id,
+            customer_name=storefront.get_user(buyer_id)["display_name"],
             order_id=body.order_id,
             subject=subject,
             message=message,
@@ -1193,15 +1427,21 @@ def create_app(
     # (`POST /admin/inquiries/{seq}/view`) 여기서 읽는다. 아직 안 쓴 문의는 접수한 내용만 보여 준다.
     @app.get("/api/shop/inquiries")
     async def list_my_inquiries(
-        buyer_id: str, limit: Annotated[int, Query(ge=1, le=100)] = 50
+        request: Request,
+        buyer_id: str | None = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
     ) -> dict:
+        buyer_id = _buyer(request, buyer_id)
         inquiries.buyer_number(buyer_id)  # 형식 확인
         own = await asyncio.to_thread(inbox.for_buyer, database, buyer_id)
         items = [inquiries.own_view(o) for o in own]
         return _ok(items[:limit], total=len(items))
 
     @app.get("/api/shop/inquiries/{inquiry_id}")
-    async def get_my_inquiry(inquiry_id: Annotated[int, Path(ge=1)], buyer_id: str) -> dict:
+    async def get_my_inquiry(
+        inquiry_id: Annotated[int, Path(ge=1)], request: Request, buyer_id: str | None = None
+    ) -> dict:
+        buyer_id = _buyer(request, buyer_id)
         inquiries.buyer_number(buyer_id)
         # 번호는 이 서버의 접수 번호다. 본인 접수가 아니면 없는 번호와 똑같이 404다
         own = await asyncio.to_thread(inbox.get_for_buyer, database, inquiry_id, buyer_id)
@@ -1254,17 +1494,18 @@ def create_app(
 
     # --- 고객 아이디어(의견): 저장만 한다. AXcellent가 읽어 가 분류·기획 전달을 한다 ------------
     @app.post("/api/shop/ideas", status_code=201)
-    async def submit_idea(body: IdeaIn) -> dict:
-        inquiries.buyer_number(body.buyer_id)  # 형식 확인(저장은 구매자 ID 그대로)
-        idea_limiter.hit(body.buyer_id)
+    async def submit_idea(body: IdeaIn, request: Request) -> dict:
+        buyer_id = _buyer(request, body.buyer_id)
+        inquiries.buyer_number(buyer_id)  # 형식 확인(저장은 구매자 ID 그대로)
+        idea_limiter.hit(buyer_id)
         text = " ".join(body.text.split())
-        key = idea_inbox.digest(body.buyer_id, body.kind, text)
+        key = idea_inbox.digest(buyer_id, body.kind, text)
         saved = await asyncio.to_thread(
             idea_inbox.add,
             database,
             digest=key,
             context_id=support_client.new_context_id(),
-            buyer_id=body.buyer_id,
+            buyer_id=buyer_id,
             kind=body.kind,
             text=text,
         )
@@ -1272,8 +1513,13 @@ def create_app(
         return _ok({"idea_id": saved["seq"], "received": True}, context_id=saved["context_id"])
 
     @app.get("/api/shop/ideas")
-    async def list_my_ideas(buyer_id: str, limit: Annotated[int, Query(ge=1, le=100)] = 50) -> dict:
-        """내 아이디어 내역(토큰 없음, 읽기): 접수 번호·종류·앞부분·처리 상태·안내 한 줄."""
+    async def list_my_ideas(
+        request: Request,
+        buyer_id: str | None = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    ) -> dict:
+        """내 아이디어 내역(읽기): 접수 번호·종류·앞부분·처리 상태·안내 한 줄. 본인만(`_buyer`)."""
+        buyer_id = _buyer(request, buyer_id)
         inquiries.buyer_number(buyer_id)
         items = await asyncio.to_thread(idea_inbox.for_buyer, database, buyer_id, limit)
         return _ok(items, total=len(items))
@@ -1304,12 +1550,13 @@ def create_app(
     # --- 해결 결과 평가: 저장만 한다. AXcellent가 읽어 가 후기로 처리한다 -----------------------
     @app.post("/api/shop/inquiries/{inquiry_id}/feedback", status_code=201)
     async def submit_inquiry_feedback(
-        inquiry_id: Annotated[int, Path(ge=1)], body: InquiryFeedbackIn
+        inquiry_id: Annotated[int, Path(ge=1)], body: InquiryFeedbackIn, request: Request
     ) -> dict:
-        inquiries.buyer_number(body.buyer_id)
-        feedback_limiter.hit(body.buyer_id)
+        buyer_id = _buyer(request, body.buyer_id)
+        inquiries.buyer_number(buyer_id)
+        feedback_limiter.hit(buyer_id)
         # 번호는 이 서버의 접수 번호다. 본인 접수가 아니면 없는 번호와 똑같이 404다
-        own = await asyncio.to_thread(inbox.get_for_buyer, database, inquiry_id, body.buyer_id)
+        own = await asyncio.to_thread(inbox.get_for_buyer, database, inquiry_id, buyer_id)
         if own is None:
             raise ShopError("NOT_FOUND", "문의를 찾을 수 없다", 404)
         view = own["view"]
@@ -1323,7 +1570,7 @@ def create_app(
             inbox.save_feedback,
             database,
             inquiry_id,
-            body.buyer_id,
+            buyer_id,
             body.rating,
             body.resolved,
             body.comment,
