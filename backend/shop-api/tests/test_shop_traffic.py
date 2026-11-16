@@ -4,6 +4,8 @@
 """
 
 import importlib.util
+import json
+import os
 from pathlib import Path
 
 import pytest
@@ -230,3 +232,22 @@ def test_orders_are_placed_unless_switched_off() -> None:
     assert traffic.orders_enabled({}) is True
     assert traffic.orders_enabled({"SHOP_TRAFFIC_ORDERS": "1"}) is True
     assert traffic.orders_enabled({"SHOP_TRAFFIC_ORDERS": "0"}) is False
+
+
+# --- run_all.sh stop이 끌 실제 pid (2026-11-12: bash 껍데기 pid만 적혀 가상 주문이 남았다) ---
+# AXcellent backend/tests/test_run_all_procs.py에서 옮겨 왔다 (그쪽은 pid 파일로 끄는 쪽)
+
+
+def test_write_pid_file_writes_its_real_pid(tmp_path: Path) -> None:
+    path = tmp_path / "shop_traffic.pid.json"
+    traffic.write_pid_file(str(path))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["pid"] == os.getpid()
+    assert data["started_at"]
+
+
+def test_write_pid_file_without_a_path_or_unwritable_does_not_raise(tmp_path: Path) -> None:
+    traffic.write_pid_file(None)  # 값이 없으면 아무것도 하지 않는다
+    traffic.write_pid_file("")
+    traffic.write_pid_file(str(tmp_path / "no" / "dir" / "x.json"))  # 적지 못해도 멈추지 않는다
+    assert not (tmp_path / "no").exists()
