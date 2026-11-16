@@ -33,6 +33,7 @@ LATER = (
     "idx_claim_inbox_unread",  # 클레임함(읽어 가지 않은 신청)
     "idx_claim_inbox_buyer",
     "idx_idea_inbox_unread",  # 아이디어함(읽어 가지 않은 아이디어)
+    "idx_sessions_buyer",  # 로그인 토큰(구매자별)
 )
 
 
