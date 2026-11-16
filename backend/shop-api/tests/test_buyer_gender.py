@@ -56,7 +56,14 @@ def test_clear_with_null_and_reject_anything_else(client: TestClient) -> None:
     client.patch("/api/shop/users/buy_0003", json={"gender": "male"})
     cleared = client.patch("/api/shop/users/buy_0003", json={"gender": None})
     assert cleared.status_code == 200 and cleared.json()["data"]["gender"] is None
-    for bad in ({"gender": "other"}, {"gender": 1}, {"job_title": "student"}, {}):
+    # 직업군(`occupation`)은 회원 프로필(`PATCH /me`)이 받는다. 이 경로는 거절한다(의도)
+    for bad in (
+        {"gender": "other"},
+        {"gender": 1},
+        {"occupation": "student"},
+        {"job_title": "student"},
+        {},
+    ):
         assert client.patch("/api/shop/users/buy_0003", json=bad).status_code == 422
     assert _user(client, "buy_0003")["gender"] is None
 
