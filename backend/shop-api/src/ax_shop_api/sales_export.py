@@ -144,7 +144,7 @@ class SalesExport:
             chunk = ids[start : start + _CHUNK]
             marks = ",".join("?" * len(chunk))
             for item in conn.execute(
-                "SELECT i.order_id, i.product_id, p.category_code, "
+                "SELECT i.order_id, i.product_id, p.category_code, p.genre_code, "
                 "COALESCE(i.title, p.name) AS title, i.qty, i.unit_price, i.coupon_share, "
                 "i.points_share FROM order_items i "
                 "LEFT JOIN products p ON p.product_id = i.product_id "
@@ -155,6 +155,7 @@ class SalesExport:
                     SalesOrderLine(
                         product_id=item["product_id"],
                         category_code=item["category_code"],
+                        genre_code=item["genre_code"],
                         title=item["title"],
                         qty=item["qty"],
                         unit_price=item["unit_price"],

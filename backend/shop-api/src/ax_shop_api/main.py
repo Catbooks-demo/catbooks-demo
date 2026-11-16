@@ -32,6 +32,10 @@ from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_val
 from ax_agent_template.config import set_agent_name
 from ax_agent_template.server import verify_token
 from ax_agent_template.services import department_of
+from ax_contracts.data_access.shop_customers import (
+    CUSTOMERS_EXPORT_LIMIT_MAX,
+    ShopCustomersExportQuery,
+)
 from ax_contracts.data_access.shop_failed_orders import ShopFailedOrdersQuery
 from ax_contracts.data_access.shop_metric_series import ShopMetricSeriesQuery
 from ax_contracts.data_access.shop_sales import ShopSalesExportQuery
@@ -1711,20 +1715,19 @@ def create_app(
             raise ShopError("INVALID_QUERY", "from·to에는 시간대가 필요하다")
         return _ok(lookups.sales_summary(from_, to, group_by))
 
-    @app.get("/api/shop/customers/export")
+    @app.get("/api/shop/customers-export")
     def customers_export(
-        cursor: Annotated[str | None, Query(max_length=256)] = None,
-        limit: Annotated[int, Query(ge=1, le=5000)] = 1000,
+        cursor: Annotated[str | None, Query(max_length=200)] = None,
+        limit: Annotated[int, Query(ge=1, le=CUSTOMERS_EXPORT_LIMIT_MAX)] = 500,
         _: str = Depends(_caller(DATA_READERS)),
     ) -> dict:
-        """가명 ID와 연령대·성별·직업군만 준다(이름·연락처 없음). `data`·`admin` 토큰만.
+        """고객 내보내기(`ShopCustomersExportResult`). 가명 ID와 값이 있는 속성만, 이름·연락처 없음.
 
-        `meta.next_cursor`는 늘 마지막 줄의 커서(빈 페이지면 받은 커서)이고
-        `meta.has_more`가 참인 동안 이어 읽는다.
-        끝난 뒤 그 커서를 두었다가 다음에 읽으면 그 뒤에 바뀐 구매자만 나온다.
+        `(change_seq, buyer_id)` 순이다. `next_cursor`를 다음 `cursor`로 넘기고, 받을 것이 없으면
+        받은 커서가 그대로 돌아온다. `data`·`admin` 토큰만.
         """
-        data, next_cursor, has_more = lookups.customer_export(cursor, limit)
-        return _ok(data, next_cursor=next_cursor, has_more=has_more)
+        query = _query(ShopCustomersExportQuery, cursor=cursor, limit=limit)
+        return _ok(lookups.customer_export(query).model_dump(mode="json"))
 
     @app.get("/api/shop/metric-series")
     def metric_series(
