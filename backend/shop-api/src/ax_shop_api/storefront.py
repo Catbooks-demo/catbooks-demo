@@ -31,20 +31,32 @@ class Storefront:
         return [self._user(r["buyer_id"]) for r in rows]
 
     def get_user(self, buyer_id: str) -> dict[str, Any]:
-        """한 구매자. `age_band`(연령대 구간)는 목록에는 싣지 않고 이 한 명 조회에만 싣는다."""
+        """한 구매자. `age_band`(연령대 구간)·`gender`(성별 코드)는 목록에는 싣지 않고
+        이 한 명 조회에만 싣는다. 모르면 None이다.
+        """
         with self.db.tx() as conn:
             found = conn.execute(
-                "SELECT buyer_id, age_band FROM buyers WHERE buyer_id = ?", (buyer_id,)
+                "SELECT buyer_id, age_band, gender FROM buyers WHERE buyer_id = ?", (buyer_id,)
             ).fetchone()
         if found is None:
             raise ShopError("BUYER_NOT_FOUND", "구매자를 찾을 수 없다", 404)
-        return {**self._user(found["buyer_id"]), "age_band": found["age_band"]}
+        return {
+            **self._user(found["buyer_id"]),
+            "age_band": found["age_band"],
+            "gender": found["gender"],
+        }
 
-    def set_age_band(self, buyer_id: str, age_band: str | None) -> dict[str, Any]:
-        """구매자 연령대 구간을 정한다(None이면 지운다). 구간만 저장하고 생년월일은 받지 않는다."""
+    def set_profile(self, buyer_id: str, fields: dict[str, str | None]) -> dict[str, Any]:
+        """구매자 프로필 칸(`age_band`·`gender`) 중 `fields`에 든 것만 바꾼다(None이면 지운다)."""
+        allowed = ("age_band", "gender")
+        names = [name for name in fields if name in allowed]
+        if not names:
+            raise ShopError("INVALID_PROFILE", "바꿀 칸이 없다", 422)
+        sets = ", ".join(f"{name} = ?" for name in names)  # 열 이름은 위 고정 목록에서만 온다
         with self.db.tx() as conn:
             changed = conn.execute(
-                "UPDATE buyers SET age_band = ? WHERE buyer_id = ?", (age_band, buyer_id)
+                f"UPDATE buyers SET {sets} WHERE buyer_id = ?",  # noqa: S608
+                [fields[name] for name in names] + [buyer_id],
             ).rowcount
         if not changed:
             raise ShopError("BUYER_NOT_FOUND", "구매자를 찾을 수 없다", 404)

@@ -50,7 +50,7 @@ BUCKET = timedelta(minutes=5)
 LISTING_WINDOW = timedelta(hours=24)  # 판매자 정보의 "최근 등록" 구간
 MAX_ATTRIBUTION_DAYS = 31  # 유입 출처 주문 조회의 기간 상한
 # 판매 집계(`sales_summary`)로 묶을 수 있는 기준. 정한 값만 받고 다른 값은 422다
-SALES_GROUPS = ("product", "age_band", "category")
+SALES_GROUPS = ("product", "age_band", "category", "gender")
 # 판매 집계의 기간 상한. 넓은 기간은 주문·품목을 통째로 합쳐 서버(연결 하나)를 붙잡는다
 MAX_SALES_SUMMARY_DAYS = 93
 # 전액 환불된 주문: 환불 합계가 주문 금액 이상이다 (`attributed_orders`·쿠폰 귀속 집계와 같은 기준)
@@ -255,13 +255,14 @@ class Lookups:
 
         접수 시각이 `since` 이상 `until` 미만인 주문이다.
 
-        `group_by`는 쉼표로 이은 `product`·`age_band`·`category`(정한 값만, 다른 값은 422).
+        `group_by`는 쉼표로 이은 `product`·`age_band`·`category`·`gender`(정한 값만, 다른 값은 422).
         한 줄은 기준 값의 조합 하나이고 두 판매 수량을 같이 준다.
         - `gross_qty`: 결제가 끝난 주문의 판매 수량 (클레임 비율의 분모처럼 환불된 주문도 센다)
         - `net_qty`: 그중 전액 환불된 주문을 뺀 수량 (`attributed_orders`와 같은 기준.
           취소된 주문은 결제가 끝난 적이 없어 처음부터 빠진다)
-        `age_band`가 null인 줄은 연령대를 모르는 구매자다 (채워 넣지 않는다). 구매자 ID·이름·
-        결제 수단 같은 개인 식별값은 돌려주지 않는다. 기간은 `MAX_SALES_SUMMARY_DAYS`일까지다.
+        `age_band`·`gender`가 null인 줄은 연령대·성별을 모르는 구매자다 (채워 넣지 않는다).
+        구매자 ID·이름·결제 수단 같은 개인 식별값은 돌려주지 않는다.
+        기간은 `MAX_SALES_SUMMARY_DAYS`일까지다.
         """
         groups = _parse_group_by(group_by)
         if until <= since:
@@ -273,12 +274,13 @@ class Lookups:
         columns = {
             "product": ("i.product_id", "product_id"),
             "age_band": ("b.age_band", "age_band"),
+            "gender": ("b.gender", "gender"),
             "category": ("pr.category_code", "category_code"),
         }
         select = ", ".join(f"{columns[g][0]} AS {columns[g][1]}" for g in groups)
         by = ", ".join(columns[g][0] for g in groups)  # 별칭이 아니라 열로 묶는다(상품 표와 겹침)
         joins = ""
-        if "age_band" in groups:
+        if "age_band" in groups or "gender" in groups:
             joins += " LEFT JOIN buyers b ON b.buyer_id = k.buyer_id"
         if "category" in groups:
             joins += " LEFT JOIN products pr ON pr.product_id = i.product_id"
