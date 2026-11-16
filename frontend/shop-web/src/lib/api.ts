@@ -88,6 +88,7 @@ export const api = {
     const sp = new URLSearchParams();
     if (p.q) sp.set("q", p.q);
     if (p.genre) sp.set("genre", p.genre);
+    if (p.category) sp.set("category_code", p.category);
     if (p.sort) sp.set("sort", p.sort);
     sp.set("page", String(p.page ?? 1));
     sp.set("size", String(p.size ?? 24));
