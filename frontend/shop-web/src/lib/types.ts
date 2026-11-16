@@ -34,11 +34,17 @@ export interface Order {
 }
 
 // ---------------------------------------------------------------- inquiries
-export interface InquiryInput { buyer_id: string; order_id: string; subject?: string; body: string }
+export interface InquiryImage { ref: string; media_type: "image/jpeg" | "image/png" | "image/webp"; data_base64: string }
+export interface InquiryInput { buyer_id: string; order_id: string; subject?: string; body: string; images?: InquiryImage[] }
 export interface Inquiry { id: number | string; status: string; order_id: string; updated_at: string }
 
 /** `GET /api/shop/inquiries`. `status`: open(답변 대기)·resolved(해결) 등. 고객지원이 처리하기 전에는 `preview`가 비거나 안내문이다. */
 export interface MyInquiry { id: number; subject: string; status: string; order_id: string; updated_at: string; rated?: boolean; can_rate?: boolean; preview?: string; notice?: string; intake_failed?: boolean }
+export interface InquiryMessage { id: number | null; role: string | null; text: string | null; created_at: string | null }
+/** `GET /api/shop/inquiries/{id}`: 목록 값에 주고받은 메시지가 붙는다. */
+export interface MyInquiryDetail extends MyInquiry { messages?: InquiryMessage[] }
+export interface InquiryFeedbackInput { rating: number; resolved: boolean; comment?: string }
+export interface InquiryFeedbackReceipt { inquiry_id: number; rated: boolean; rating: number }
 export interface MyReview { review_id: number | string; product_id: string; order_id: string; rating: number; body: string; created_at: string }
 export interface ReviewsData {
   summary: { count: number; avg: number; by_rating: Record<string, number> };

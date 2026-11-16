@@ -1,5 +1,5 @@
 import { SHOP_API_URL } from "./env";
-import type { AgeBand, Banner, CartPrice, Category, ClaimInput, ClaimReceipt, DemoUser, IdeaInput, IdeaReceipt, Inquiry, Me, MeUpdate, MyInquiry, MyReview, Reviewable, ReviewPage, ReviewsData, SignupInput, InquiryInput, MyClaim, MyIdea, Order, OrderLineInput, PaymentConfig, Product, ProductPage, ProductQuery, Genre, BestProduct, Seller, TossPrepared } from "./types";
+import type { AgeBand, Banner, CartPrice, Category, ClaimInput, ClaimReceipt, DemoUser, IdeaInput, IdeaReceipt, Inquiry, Me, MeUpdate, MyInquiry, MyInquiryDetail, InquiryFeedbackInput, InquiryFeedbackReceipt, MyReview, Reviewable, ReviewPage, ReviewsData, SignupInput, InquiryInput, MyClaim, MyIdea, Order, OrderLineInput, PaymentConfig, Product, ProductPage, ProductQuery, Genre, BestProduct, Seller, TossPrepared } from "./types";
 
 // 판매 사이트 → shop-api(`/api/shop/*`)의 모든 호출은 이 파일 한 곳에 둔다.
 // 성공은 `{data, meta}`, 실패는 `{error: {code, message}}`. 구매자는 이메일로 가입·로그인하고 로그인 토큰을 `Authorization: Bearer`로 보낸다.
@@ -126,6 +126,10 @@ export const api = {
 
   /** 내 1:1 문의 내역(본인 것만). 접수 직후에는 `preview`만 있고 고객지원이 처리하면 상태가 바뀐다. */
   myInquiries: () => request<MyInquiry[]>("/api/shop/inquiries"),
+  /** 내 문의 하나와 메시지. 404 NOT_FOUND. */
+  myInquiry: (id: number) => request<MyInquiryDetail>(`/api/shop/inquiries/${id}`),
+  /** 해결된 문의 평가(한 번만). 409 INVALID_STATE, 429 RATE_LIMITED. */
+  rateInquiry: (id: number, b: InquiryFeedbackInput) => post<InquiryFeedbackReceipt>(`/api/shop/inquiries/${id}/feedback`, b),
   /** 내가 쓴 후기. */
   myReviews: () => request<MyReview[]>("/api/shop/me/reviews"),
   /** 후기를 쓸 수 있는 주문 품목(배송 완료 + 아직 안 쓴 것). */
