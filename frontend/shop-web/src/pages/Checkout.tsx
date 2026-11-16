@@ -38,7 +38,7 @@ export default function CheckoutPage() {
       cart.clear();
       // 결제가 실패해도 주문은 만들어졌다: 주문 상세에서 상태를 보고 다시 결제한다.
       await api.pay(order.order_id, method).catch(() => undefined);
-      router.push(`/orders/${order.order_id}?placed=1`);
+      router.push(`/my/orders/${order.order_id}?placed=1`);
     } catch (e) {
       setError((e as Error).message);
       inflight.current = false;
@@ -67,14 +67,14 @@ export default function CheckoutPage() {
     } catch (e) {
       if (e instanceof TossRequestError && order && isInputError(e.code)) {
         // 결제창이 열리기 전 입력 오류: 주문은 만들어졌으니 주문 상세에서 다시 골라 결제한다
-        router.push(`/orders/${order.order_id}?placed=1&payhint=1`);
+        router.push(`/my/orders/${order.order_id}?placed=1&payhint=1`);
         return;
       }
       if (e instanceof TossRequestError) { router.push(failHref(e)); return; }
       if (order) {
         // 주문은 만들어졌다: 같은 상품으로 두 번 주문하지 않게 장바구니를 비우고 주문 상세에서 다시 결제한다
         cart.clear();
-        router.push(`/orders/${order.order_id}?placed=1`);
+        router.push(`/my/orders/${order.order_id}?placed=1`);
         return;
       }
       setError((e as Error).message);

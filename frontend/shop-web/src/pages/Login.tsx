@@ -1,11 +1,17 @@
 import { useState, type FormEvent } from "react";
-import { Link, useRouter } from "@/lib/nav";
+import { Link, useRouter, useSearchParams } from "@/lib/nav";
 import { ErrorNote, PageTitle } from "@/components/shop/bits";
 import { useAuth } from "@/lib/auth";
+
+/** `?next=`는 같은 사이트 안 경로(`/`로 시작하고 `//`나 `/\`가 아닌 것)만 따른다. */
+export function safeNext(raw: string | null): string {
+  return raw && raw.startsWith("/") && !raw.startsWith("//") && !raw.startsWith("/\\") ? raw : "/my";
+}
 
 export default function LoginPage() {
   const { login } = useAuth();
   const router = useRouter();
+  const next = safeNext(useSearchParams().get("next"));
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -18,7 +24,7 @@ export default function LoginPage() {
     setError(null);
     try {
       await login(email.trim(), password);
-      router.push("/orders");
+      router.replace(next);
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);

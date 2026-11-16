@@ -1,5 +1,5 @@
 import { SHOP_API_URL } from "./env";
-import type { AgeBand, Banner, CartPrice, Category, ClaimInput, ClaimReceipt, DemoUser, IdeaInput, IdeaReceipt, Inquiry, Me, MeUpdate, SignupInput, InquiryInput, MyClaim, MyIdea, Order, OrderLineInput, PaymentConfig, Product, Seller, TossPrepared } from "./types";
+import type { AgeBand, Banner, CartPrice, Category, ClaimInput, ClaimReceipt, DemoUser, IdeaInput, IdeaReceipt, Inquiry, Me, MeUpdate, MyInquiry, MyReview, Reviewable, SignupInput, InquiryInput, MyClaim, MyIdea, Order, OrderLineInput, PaymentConfig, Product, Seller, TossPrepared } from "./types";
 
 // 판매 사이트 → shop-api(`/api/shop/*`)의 모든 호출은 이 파일 한 곳에 둔다.
 // 성공은 `{data, meta}`, 실패는 `{error: {code, message}}`. 구매자는 이메일로 가입·로그인하고 로그인 토큰을 `Authorization: Bearer`로 보낸다.
@@ -38,6 +38,13 @@ export function storeToken(t: string | null) {
   }
 }
 
+// 서버가 토큰을 무효라고 하면 api.ts가 토큰을 지운다. 로그인 상태(AuthProvider)도 따라 비우도록 알린다.
+const sessionListeners = new Set<() => void>();
+export function onSessionCleared(fn: () => void): () => void {
+  sessionListeners.add(fn);
+  return () => { sessionListeners.delete(fn); };
+}
+
 // ---------------------------------------------------------------- 호출
 interface Body<T> { data?: T; meta?: Record<string, unknown>; error?: { code?: string; message?: string } }
 
@@ -54,7 +61,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const body = (await res.json().catch(() => null)) as Body<T> | null;
   if (!res.ok || !body || body.data === undefined) {
     const code = body?.error?.code;
-    if (res.status === 401 && (code === "UNAUTHORIZED" || code === "LOGIN_REQUIRED")) storeToken(null);
+    if (res.status === 401 && (code === "UNAUTHORIZED" || code === "LOGIN_REQUIRED")) { storeToken(null); sessionListeners.forEach((fn) => fn()); }
     throw new ApiError(body?.error?.message ?? `요청 실패 (${res.status})`, res.status, body?.error?.code);
   }
   return body.data;
@@ -92,6 +99,13 @@ export const api = {
   /** 내 신청과 AXcellent가 적어 준 결과. 판매 서버에 저장된 것을 읽는다. */
   myClaims: (buyerId: string, orderId?: string) =>
     request<MyClaim[]>(`/api/shop/claims?buyer_id=${encodeURIComponent(buyerId)}${orderId ? `&order_id=${encodeURIComponent(orderId)}` : ""}`),
+
+  /** 내 1:1 문의 내역(본인 것만). 접수 직후에는 `preview`만 있고 고객지원이 처리하면 상태가 바뀐다. */
+  myInquiries: () => request<MyInquiry[]>("/api/shop/inquiries"),
+  /** 내가 쓴 후기. */
+  myReviews: () => request<MyReview[]>("/api/shop/me/reviews"),
+  /** 후기를 쓸 수 있는 주문 품목(배송 완료 + 아직 안 쓴 것). */
+  reviewable: () => request<Reviewable[]>("/api/shop/me/reviewable"),
 
   /** 1:1 문의 접수(토큰 없음). 주문이 필수이며 shop-api가 고객지원으로 넘긴다. 같은 내용을 10분 안에 다시 보내면 같은 접수로 처리된다. */
   submitInquiry: (b: InquiryInput) => post<Inquiry>("/api/shop/inquiries", b),
@@ -131,8 +145,6 @@ export const api = {
   // --- shop-api에 아직 없는 것: ax-backend#385 결과로 연결 --------------------
   // TODO(ax-backend#385): 클레임 환불액 미리보기, 신청 철회·사진 추가
   previewClaim: (_b: ClaimInput) => notReady<never>("환불액 미리보기"),
-  // TODO(ax-backend#385): 문의 내역 조회(shop-api에 목록 API 없음)
-  inquiryHistory: (_buyerId: string) => notReady<never>("문의 내역 조회"),
   // TODO(ax-backend#385): 후기
   reviews: (_productId: string) => notReady<never>("구매 후기"),
 };

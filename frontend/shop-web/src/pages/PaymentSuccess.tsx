@@ -59,7 +59,7 @@ export default function PaymentSuccessPage() {
           {state.orderId && <p className="mt-3 font-mono text-xs text-red-700">주문 번호 {state.orderId}</p>}
         </section>
         <div className="mt-5 flex flex-wrap gap-2">
-          <Link href={state.orderId ? `/orders/${state.orderId}` : "/orders"} className="btn-primary">다시 결제하기</Link>
+          <Link href={state.orderId ? `/my/orders/${state.orderId}` : "/my/orders"} className="btn-primary">다시 결제하기</Link>
           {state.orderId && <Link href={supportHref(state.orderId)} className="btn-ghost">문의하기</Link>}
         </div>
       </div>
@@ -81,7 +81,7 @@ export default function PaymentSuccessPage() {
         </dl>
       </section>
       <div className="mt-5 flex flex-wrap gap-2">
-        <Link href={`/orders/${o.order_id}`} className="btn-primary">주문 상세 보기</Link>
+        <Link href={`/my/orders/${o.order_id}`} className="btn-primary">주문 상세 보기</Link>
         <Link href="/products" className="btn-ghost">쇼핑 계속하기</Link>
       </div>
     </div>

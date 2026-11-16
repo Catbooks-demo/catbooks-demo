@@ -27,6 +27,9 @@ export const CLAIM_STATUS_TONE: Record<string, string> = {
   return_received: "bg-brand-50 text-brand-700", completed: "bg-emerald-50 text-emerald-700", rejected: "bg-red-50 text-red-700",
   withdrawn: "bg-ink-100 text-ink-500",
 };
+/** 더 바뀌지 않는 클레임 상태(백엔드 `claim_inbox.FINAL`의 completed·not_accepted + 고객지원의 rejected·withdrawn). 진행 중 수를 셀 때 뺀다. */
+export const CLAIM_TERMINAL = new Set(["completed", "rejected", "not_accepted", "withdrawn"]);
+export const INQUIRY_STATUS_KO: Record<string, string> = { open: "답변 대기", resolved: "해결됨" };
 export const INSPECTION_KO: Record<string, string> = { pending: "검수 대기", ok: "정상", mismatch: "사유와 불일치" };
 export const PAYMENT_KO: Record<string, string> = { card: "신용·체크카드", transfer: "계좌이체", easy_pay: "간편결제", phone: "휴대폰", other: "기타 결제" };
 
@@ -58,3 +61,12 @@ export const ORDER_STATUS_KO: Record<string, string> = {
 export const ORDER_STATUS_TONE: Record<string, string> = {
   pending_payment: "bg-amber-50 text-amber-700", payment_failed: "bg-red-50 text-red-700", paid: "bg-emerald-50 text-emerald-700", cancelled: "bg-ink-100 text-ink-500",
 };
+
+/** 주문 진행 표시: 결제 → 배송 중 → 배송 완료. 결제 전·취소는 서버 상태 그대로 쓴다. */
+export function orderStage(o: { status: string; shipped_at: string | null; delivered_at: string | null }): { label: string; tone: string } {
+  if (o.status === "paid") {
+    if (o.delivered_at) return { label: "배송 완료", tone: "bg-emerald-50 text-emerald-700" };
+    if (o.shipped_at) return { label: "배송 중", tone: "bg-sky-50 text-sky-700" };
+  }
+  return { label: ORDER_STATUS_KO[o.status] ?? o.status, tone: ORDER_STATUS_TONE[o.status] ?? "bg-ink-100 text-ink-700" };
+}

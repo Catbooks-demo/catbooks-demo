@@ -1,4 +1,5 @@
-import { Link } from "@/lib/nav";
+import { Navigate } from "react-router";
+import { Link, usePathname } from "@/lib/nav";
 import { useEffect, useState, type ReactNode } from "react";
 import { hueOf, won } from "@/lib/format";
 import { useCategories } from "@/lib/categories";
@@ -71,14 +72,10 @@ export function ErrorNote({ error }: { error: string | null }) {
 }
 
 export function RequireLogin({ children, user, ready }: { children: ReactNode; user: unknown; ready: boolean }) {
+  const path = usePathname();
+  const search = typeof window === "undefined" ? "" : window.location.search;
   if (!ready) return <div className="py-20 text-center text-sm text-ink-500">불러오는 중…</div>;
-  if (!user) {
-    return (
-      <Empty>
-        로그인이 필요해요. <Link href="/login" className="font-semibold text-brand-600 underline">로그인하기</Link>
-      </Empty>
-    );
-  }
+  if (!user) return <Navigate to={`/login?next=${encodeURIComponent(path + search)}`} replace />;
   return <>{children}</>;
 }
 

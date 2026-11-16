@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { api, storeToken, storedToken } from "./api";
+import { api, onSessionCleared, storeToken, storedToken } from "./api";
 import type { Me, SignupInput } from "./types";
 
 interface AuthValue {
@@ -29,6 +29,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (status === 401) { storeToken(null); setUser(null); }
     }
   }, []);
+
+  useEffect(() => onSessionCleared(() => setUser(null)), []);
 
   useEffect(() => { void refresh().finally(() => setReady(true)); }, [refresh]);
 

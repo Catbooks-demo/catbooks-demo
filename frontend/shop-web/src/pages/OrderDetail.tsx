@@ -9,7 +9,7 @@ import { TossWidgetBox } from "@/components/shop/TossWidgetBox";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { dateStr, hueOf, shortDateTime, won } from "@/lib/format";
-import { ORDER_STATUS_KO, ORDER_STATUS_TONE, PAYMENT_KO } from "@/lib/labels";
+import { orderStage, PAYMENT_KO } from "@/lib/labels";
 import { failureGuide, lastFailedPayment, supportHref } from "@/lib/payment";
 import { failHref, isInputError, TossRequestError, usePayPath, useTossWidget } from "@/lib/toss";
 import type { Order } from "@/lib/types";
@@ -96,7 +96,7 @@ function Detail() {
 
   return (
     <RequireLogin user={user} ready={ready}>
-      <Link href="/orders" className="text-xs text-ink-500 hover:underline">‹ 주문 목록</Link>
+      <Link href="/my/orders" className="text-xs text-ink-500 hover:underline">‹ 주문 목록</Link>
       <ErrorNote error={error} />
       {o && !mine && <ErrorNote error="다른 구매자의 주문입니다." />}
       {o && mine && (
@@ -105,7 +105,7 @@ function Detail() {
           {payHint && payable && <p role="alert" className="rounded-lg bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">아직 결제하지 않았어요. 아래에서 결제 정보를 고른 뒤 다시 결제해 주세요.</p>}
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="font-mono text-lg font-bold">{o.order_id}</h1>
-            <span className={`chip ${ORDER_STATUS_TONE[o.status] ?? "bg-ink-100 text-ink-700"}`}>{ORDER_STATUS_KO[o.status] ?? o.status}</span>
+            <span className={`chip ${orderStage(o).tone}`}>{orderStage(o).label}</span>
             <span className="text-xs text-ink-500">{shortDateTime(o.created_at)} 주문{o.promised_delivery_at && ` · ${dateStr(o.promised_delivery_at)} 도착 예정`}{o.delivered_at && ` · ${dateStr(o.delivered_at)} 도착`}</span>
           </div>
 
