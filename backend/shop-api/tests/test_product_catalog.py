@@ -118,13 +118,34 @@ def test_best_counts_paid_quantity_and_is_public(client: TestClient) -> None:
     assert client.get("/api/shop/products/best", params={"limit": 0}).status_code == 422
 
 
-def test_best_is_cached_per_key(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_best_sold_quantities_are_cached(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("SHOP_BEST_CACHE_S", "300")
     _buy(client, "prd_0001", 1)
     assert len(client.get("/api/shop/products/best").json()["data"]) == 1
     _buy(client, "prd_0002", 1)
     assert len(client.get("/api/shop/products/best").json()["data"]) == 1  # 캐시
-    assert len(client.get("/api/shop/products/best", params={"limit": 5}).json()["data"]) == 2
+    assert len(client.get("/api/shop/products/best", params={"limit": 5}).json()["data"]) == 1
+
+
+def test_unknown_genre_is_422_on_list_and_best(client: TestClient) -> None:
+    assert client.get("/api/shop/products", params={"genre": "nope"}).status_code == 422
+    assert client.get("/api/shop/products/best", params={"genre": "nope"}).status_code == 422
+    assert client.get("/api/shop/products", params={"genre": ""}).status_code == 200
+
+
+def test_cache_is_bounded_and_popular_works_with_cache(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SHOP_BEST_CACHE_S", "300")
+    _buy(client, "prd_0005", 3)
+    for limit in range(1, 30):
+        client.get("/api/shop/products/best", params={"limit": limit})
+    shop_cache = client.app.state.shop._sold_cache  # noqa: SLF001
+    assert len(shop_cache) == 1  # limit는 키가 아니다
+    first = client.get("/api/shop/products", params={"sort": "popular"}).json()["data"][0]
+    assert first["product_id"] == "prd_0005"
 
 
 def test_genres_list_counts_active_products(client: TestClient) -> None:

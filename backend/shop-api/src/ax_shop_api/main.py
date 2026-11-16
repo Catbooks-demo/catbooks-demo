@@ -706,6 +706,14 @@ def _order_scope(request: Request) -> str | None:
     return None
 
 
+def _genre_filter(value: str | None) -> str | None:
+    """목록·베스트의 `genre` 쿼리. 모르는 코드는 422, 빈 글은 거르지 않는다."""
+    try:
+        return genres.normalize_genre(value)
+    except ValueError as err:
+        raise ShopError("INVALID_GENRE", str(err), 422) from err
+
+
 def _ok(data: Any, **meta: Any) -> dict[str, Any]:
     return {"data": data, "meta": meta}
 
@@ -944,7 +952,13 @@ def create_app(
     ) -> dict:
         """쿼리가 없으면 활성 상품 전체 배열(지금 그대로). `page`가 있으면 `meta`에 total 등."""
         items, total = shop.list_products(
-            seller_id, category_code, q=q, genre=genre, sort=sort, page=page, size=size
+            seller_id,
+            category_code,
+            q=q,
+            genre=_genre_filter(genre),
+            sort=sort,
+            page=page,
+            size=size,
         )
         if page is None:
             return _ok(items)
@@ -962,7 +976,7 @@ def create_app(
         limit: int = Query(default=10, ge=1, le=50),
     ) -> dict:
         """최근 `days`일 결제 수량이 많은 상품(각 `sold_qty`). 토큰 없음, 잠깐 캐시한다."""
-        return _ok(shop.best_products(genre, days, limit))
+        return _ok(shop.best_products(_genre_filter(genre), days, limit))
 
     @app.get("/api/shop/products/{product_id}")
     async def get_product(product_id: str) -> dict:

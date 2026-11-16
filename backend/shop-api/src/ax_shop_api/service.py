@@ -260,7 +260,7 @@ class Shop:
         self.monitor = monitor or Monitor(db)
         self.clock = clock
         self.last_release: dict[str, Any] | None = None
-        self._best_cache: dict[tuple[str | None, int, int], tuple[float, list[dict[str, Any]]]] = {}
+        self._sold_cache: dict[tuple[int, str | None], tuple[float, dict[str, int]]] = {}
         # 결제 설정 버전이 지금 값이 된 시각·바꾼 쪽 (켤 때는 v1, 바꾼 쪽 없음)
         self.payment_version_since = _now()
         self.payment_version_by: str | None = None
@@ -310,29 +310,54 @@ class Shop:
                 "OR p.publisher LIKE ? ESCAPE '\\')"
             )
             args += [like, like, like]
-        join, order = "", "p.product_id"
+        order = "p.product_id"
+        popular = False
         if sort or q or genre or page is not None:
             sort = sort or "popular"
-            if sort == "popular":
-                join = f" LEFT JOIN ({_SOLD_SQL}) s ON s.product_id = p.product_id"
-                order = "COALESCE(s.sold_qty, 0) DESC, p.product_id"
-                args = [TENANT_ID, self._since(PRODUCT_POPULAR_DAYS), *args]
-            elif sort == "new":
+            popular = sort == "popular"
+            if sort == "new":
                 order = "p.created_at DESC, p.product_id DESC"
             elif sort == "price_asc":
                 order = "p.price ASC, p.product_id"
             elif sort == "price_desc":
                 order = "p.price DESC, p.product_id"
-        base = f"FROM products p{join} WHERE {' AND '.join(where)}"  # noqa: S608 - 고정 문구뿐
-        sql = f"SELECT p.* {base} ORDER BY {order}"  # noqa: S608
+        base = f"FROM products p WHERE {' AND '.join(where)}"  # noqa: S608 - 고정 문구뿐
         with self.db.tx() as conn:
-            if page is not None:
-                total = conn.execute(f"SELECT COUNT(*) {base}", args).fetchone()[0]  # noqa: S608
-                sql += " LIMIT ? OFFSET ?"
-                args = [*args, size, (page - 1) * size]
-            rows = conn.execute(sql, args).fetchall()
-        items = [self._product(r) for r in rows]
-        return items, (total if page is not None else len(items))
+            rows = conn.execute(f"SELECT p.* {base} ORDER BY {order}", args).fetchall()  # noqa: S608
+        if popular:  # 최근 30일 결제 수량(캐시된 묶음)이 많은 순, 같으면 product_id 순
+            sold = self._sold_map(PRODUCT_POPULAR_DAYS, None)
+            rows = sorted(rows, key=lambda r: (-sold.get(r["product_id"], 0), r["product_id"]))
+        total = len(rows)
+        if page is not None:
+            rows = rows[(page - 1) * size : page * size]
+        return [self._product(r) for r in rows], total
+
+    def _sold_map(self, days: int, genre_code: str | None) -> dict[str, int]:
+        """최근 `days`일 결제된 주문의 상품별 수량(판매 중 상품만, 장르가 있으면 그 장르만).
+
+        `(days, genre_code)`별로 `SHOP_BEST_CACHE_S`초 캐시한다(키 수가 93 x 17로 막혀 있다).
+        만료된 칸은 쓸 때마다 치운다.
+        """
+        ttl = _best_cache_seconds()
+        key = (days, genre_code)
+        now = self.clock()
+        hit = self._sold_cache.get(key)
+        if ttl > 0 and hit is not None and hit[0] > now:
+            return hit[1]
+        sql = (
+            f"SELECT s.product_id, s.sold_qty FROM ({_SOLD_SQL}) s "  # noqa: S608 - 고정 문구
+            "JOIN products p ON p.product_id = s.product_id WHERE p.active = 1"
+        )
+        args: list[Any] = [TENANT_ID, self._since(days)]
+        if genre_code:
+            sql += " AND p.genre_code = ?"
+            args.append(genre_code)
+        with self.db.tx() as conn:
+            sold = {r["product_id"]: r["sold_qty"] for r in conn.execute(sql, args).fetchall()}
+        if ttl > 0:
+            self._sold_cache = {k: v for k, v in self._sold_cache.items() if v[0] > now}
+            self._sold_cache[key] = (now + ttl, sold)
+        return sold
 
     def _since(self, days: int) -> str:
         return (datetime.fromtimestamp(self.clock(), UTC) - timedelta(days=days)).strftime(
@@ -353,32 +378,23 @@ class Shop:
         ]
 
     def best_products(self, genre: str | None, days: int, limit: int) -> list[dict[str, Any]]:
-        """최근 `days`일 결제 수량이 많은 상품(결제된 주문만). 결과는 잠깐 캐시한다.
+        """최근 `days`일 결제 수량이 많은 상품(결제된 주문만, 각 `sold_qty`).
 
-        캐시 초 수는 `SHOP_BEST_CACHE_S`(기본 300, 0이면 캐시 안 함)이고 (장르, 일수, 개수)별이다.
+        수량 묶음을 `SHOP_BEST_CACHE_S`초(기본 300, 0이면 캐시 안 함) 캐시하고
+        `limit`는 그 뒤에 자른다.
         """
-        ttl = _best_cache_seconds()
-        key = (genre or None, days, limit)
-        now = self.clock()
-        hit = self._best_cache.get(key)
-        if ttl > 0 and hit is not None and hit[0] > now:
-            return [dict(item) for item in hit[1]]
-        args: list[Any] = [TENANT_ID, self._since(days)]
-        sql = (
-            f"SELECT p.*, s.sold_qty FROM ({_SOLD_SQL}) s "  # noqa: S608 - 고정 문구
-            "JOIN products p ON p.product_id = s.product_id WHERE p.active = 1"
-        )
-        if genre:
-            sql += " AND p.genre_code = ?"
-            args.append(genre)
-        sql += " ORDER BY s.sold_qty DESC, p.product_id LIMIT ?"
-        args.append(limit)
+        sold = self._sold_map(days, genre or None)
+        top = sorted(sold.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
+        if not top:
+            return []
+        marks = ",".join("?" * len(top))
         with self.db.tx() as conn:
-            rows = conn.execute(sql, args).fetchall()
-        items = [self._product(r) | {"sold_qty": r["sold_qty"]} for r in rows]
-        if ttl > 0:
-            self._best_cache[key] = (now + ttl, items)
-        return [dict(item) for item in items]
+            rows = conn.execute(
+                f"SELECT * FROM products WHERE active = 1 AND product_id IN ({marks})",  # noqa: S608
+                [pid for pid, _ in top],
+            ).fetchall()
+        by_id = {r["product_id"]: r for r in rows}
+        return [self._product(by_id[pid]) | {"sold_qty": qty} for pid, qty in top if pid in by_id]
 
     def get_product(self, product_id: str) -> dict[str, Any]:
         with self.db.tx() as conn:
