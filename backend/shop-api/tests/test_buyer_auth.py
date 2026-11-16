@@ -249,13 +249,13 @@ def test_me_reads_and_updates_profile(client: TestClient, db: Db) -> None:
     assert client.get("/api/shop/me", headers=ADMIN).status_code == 403
     me = client.get("/api/shop/me", headers=a)
     assert me.status_code == 200 and me.json()["data"]["buyer_id"] == a_id
-    assert me.json()["data"]["job_group"] is None
+    assert me.json()["data"]["occupation"] is None
     _age(db, a_id)
-    res = client.patch("/api/shop/me", json={"job_group": "employee"}, headers=a)
-    assert res.status_code == 200 and res.json()["data"]["job_group"] == "employee"
-    assert client.get("/api/shop/me", headers=a).json()["data"]["job_group"] == "employee"
+    res = client.patch("/api/shop/me", json={"occupation": "employee"}, headers=a)
+    assert res.status_code == 200 and res.json()["data"]["occupation"] == "employee"
+    assert client.get("/api/shop/me", headers=a).json()["data"]["occupation"] == "employee"
     assert _updated_at(db, a_id) != "2000-01-01T00:00:00Z"
-    bad = client.patch("/api/shop/me", json={"job_group": "astronaut"}, headers=a)
+    bad = client.patch("/api/shop/me", json={"occupation": "astronaut"}, headers=a)
     assert bad.status_code == 422
     assert client.patch("/api/shop/me", json={}, headers=a).status_code == 422
     # PATCH /users/{id}(연령대·성별)도 바꾼 시각을 적는다

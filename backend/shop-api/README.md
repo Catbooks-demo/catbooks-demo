@@ -83,8 +83,8 @@
 - 주문 조회 `GET /orders`·`GET /orders/{id}`: 구매자 토큰이면 본인 주문만(남의 주문은 404, 다른 `buyer_id`를 물으면 403), 서비스 토큰·연결 키면 전체, 토큰이 없으면 `SHOP_ORDERS_PUBLIC_READ=on`(기본)일 때 지금처럼 전체(AXcellent 재무·고객지원이 이렇게 읽는다)·`off`면 401. 알 수 없는 토큰은 401.
 - `GET /api/shop/users`(목록)는 `admin` 토큰만(`legacy`에서 토큰 없이 부르면 옛 동작).
 - 내 정보(구매자 로그인 토큰만, 없으면 401 `LOGIN_REQUIRED`, 서비스 토큰은 403):
-  - `GET /api/shop/me` → 사용자 `{buyer_id, display_name, email, age_band, gender, job_group}`.
-  - `PATCH /api/shop/me` `{display_name?, age_band?, gender?, job_group?}` → 보낸 칸만 바꾼다(코드값만, null이면 지움, 이름은 지울 수 없다, 칸이 없으면 422). `buyers.updated_at`을 적는다.
+  - `GET /api/shop/me` → 사용자 `{buyer_id, display_name, email, age_band, gender, occupation}`.
+  - `PATCH /api/shop/me` `{display_name?, age_band?, gender?, occupation?}` → 보낸 칸만 바꾼다(코드값만, null이면 지움, 이름은 지울 수 없다, 칸이 없으면 422). `buyers.updated_at`을 적는다.
   - `POST /api/shop/me/password` `{current, new}` → 현재 비밀번호가 틀리면 401 `INVALID_PASSWORD`, 새 비밀번호는 8~128자(422 `WEAK_PASSWORD`), 비밀번호가 없는 데모 구매자는 409 `NO_PASSWORD`. 바꾸면 **지금 토큰을 뺀 이 구매자의 다른 로그인을 모두 끊는다**.
 
 | 환경변수 | 기본값 | 뜻 |

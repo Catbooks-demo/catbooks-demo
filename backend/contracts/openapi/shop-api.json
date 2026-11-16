@@ -738,7 +738,7 @@
             ],
             "title": "Gender"
           },
-          "job_group": {
+          "occupation": {
             "anyOf": [
               {
                 "enum": [
@@ -754,7 +754,7 @@
                 "type": "null"
               }
             ],
-            "title": "Job Group"
+            "title": "Occupation"
           }
         },
         "title": "MeIn",
@@ -1406,7 +1406,7 @@
             ],
             "title": "Gender"
           },
-          "job_group": {
+          "occupation": {
             "anyOf": [
               {
                 "enum": [
@@ -1422,7 +1422,7 @@
                 "type": "null"
               }
             ],
-            "title": "Job Group"
+            "title": "Occupation"
           },
           "password": {
             "maxLength": 1024,

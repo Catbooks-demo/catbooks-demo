@@ -184,7 +184,7 @@ class SignupIn(BaseModel):
     agree_privacy: Literal[True]
     age_band: Literal["10s", "20s", "30s", "40s", "50s_plus"] | None = None
     gender: Literal["female", "male", "no_answer"] | None = None
-    job_group: Literal["student", "employee", "self_employed", "other", "no_answer"] | None = None
+    occupation: Literal["student", "employee", "self_employed", "other", "no_answer"] | None = None
 
 
 class LoginIn(BaseModel):
@@ -208,7 +208,7 @@ class MeIn(BaseModel):
     display_name: str | None = Field(default=None, max_length=200)
     age_band: Literal["10s", "20s", "30s", "40s", "50s_plus"] | None = None
     gender: Literal["female", "male", "no_answer"] | None = None
-    job_group: Literal["student", "employee", "self_employed", "other", "no_answer"] | None = None
+    occupation: Literal["student", "employee", "self_employed", "other", "no_answer"] | None = None
 
     @model_validator(mode="after")
     def _at_least_one_field(self) -> MeIn:
@@ -848,7 +848,7 @@ def create_app(
             body.display_name,
             body.age_band,
             body.gender,
-            body.job_group,
+            body.occupation,
         )
         return _ok({"token": token, "user": user})
 

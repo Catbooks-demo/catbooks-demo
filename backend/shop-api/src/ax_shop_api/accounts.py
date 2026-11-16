@@ -24,7 +24,7 @@ from ax_shop_api.service import ShopError
 
 AGE_BANDS: tuple[str, ...] = ("10s", "20s", "30s", "40s", "50s_plus")
 GENDERS: tuple[str, ...] = ("female", "male", "no_answer")
-JOB_GROUPS: tuple[str, ...] = ("student", "employee", "self_employed", "other", "no_answer")
+OCCUPATIONS: tuple[str, ...] = ("student", "employee", "self_employed", "other", "no_answer")
 
 PASSWORD_MIN = 8
 PASSWORD_MAX = 128
@@ -37,7 +37,7 @@ ENV_DEMO_LOGIN = "SHOP_DEMO_LOGIN"
 _SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2**14, 8, 1
 _SALT_BYTES = 16
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-_PROFILE_FIELDS = ("display_name", "age_band", "gender", "job_group")
+_PROFILE_FIELDS = ("display_name", "age_band", "gender", "occupation")
 
 
 def hash_password(password: str) -> str:
@@ -139,7 +139,7 @@ class Accounts:
     # --- 사용자 ---------------------------------------------------------------
     def _user(self, conn: sqlite3.Connection, buyer_id: str) -> dict[str, Any]:
         row = conn.execute(
-            "SELECT b.buyer_id, b.age_band, b.gender, b.job_group, a.email, a.display_name "
+            "SELECT b.buyer_id, b.age_band, b.gender, b.occupation, a.email, a.display_name "
             "FROM buyers b LEFT JOIN accounts a ON a.buyer_id = b.buyer_id "
             "WHERE b.buyer_id = ?",
             (buyer_id,),
@@ -153,7 +153,7 @@ class Accounts:
             "email": row["email"],
             "age_band": row["age_band"],
             "gender": row["gender"],
-            "job_group": row["job_group"],
+            "occupation": row["occupation"],
         }
 
     def _issue(self, conn: sqlite3.Connection, buyer_id: str) -> str:
@@ -178,14 +178,14 @@ class Accounts:
         display_name: str,
         age_band: str | None,
         gender: str | None,
-        job_group: str | None,
+        occupation: str | None,
     ) -> tuple[str, dict[str, Any]]:
         address = normalize_email(email)
         _check_password(password)
         name = _clean_name(display_name)
         _check_code("age_band", age_band, AGE_BANDS)
         _check_code("gender", gender, GENDERS)
-        _check_code("job_group", job_group, JOB_GROUPS)
+        _check_code("occupation", occupation, OCCUPATIONS)
         hashed = hash_password(password)
         now = _stamp(_now())
         try:
@@ -195,8 +195,8 @@ class Accounts:
                 buyer_id = _next_buyer_id(conn)
                 conn.execute(
                     "INSERT INTO buyers(buyer_id, tenant_id, created_at, age_band, gender, "
-                    "job_group, updated_at) VALUES (?,?,?,?,?,?,?)",
-                    (buyer_id, TENANT_ID, now, age_band, gender, job_group, now),
+                    "occupation, updated_at) VALUES (?,?,?,?,?,?,?)",
+                    (buyer_id, TENANT_ID, now, age_band, gender, occupation, now),
                 )
                 conn.execute(
                     "INSERT INTO accounts(buyer_id, email, password_hash, display_name, "
@@ -269,7 +269,7 @@ class Accounts:
             fields = {**fields, "display_name": _clean_name(fields["display_name"])}
         _check_code("age_band", fields.get("age_band"), AGE_BANDS)
         _check_code("gender", fields.get("gender"), GENDERS)
-        _check_code("job_group", fields.get("job_group"), JOB_GROUPS)
+        _check_code("occupation", fields.get("occupation"), OCCUPATIONS)
         with self.db.tx() as conn:
             if not conn.execute("SELECT 1 FROM buyers WHERE buyer_id = ?", (buyer_id,)).fetchone():
                 raise ShopError("BUYER_NOT_FOUND", "구매자를 찾을 수 없다", 404)
