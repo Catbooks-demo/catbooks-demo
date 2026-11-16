@@ -24,7 +24,7 @@ from ax_shop_api.service import ShopError
 
 AGE_BANDS: tuple[str, ...] = ("10s", "20s", "30s", "40s", "50s_plus")
 GENDERS: tuple[str, ...] = ("female", "male", "no_answer")
-JOB_GROUPS: tuple[str, ...] = ("student", "employee", "self_employed", "other", "no_answer")
+OCCUPATIONS: tuple[str, ...] = ("student", "employee", "self_employed", "other", "no_answer")
 
 PASSWORD_MIN = 8
 PASSWORD_MAX = 128
@@ -37,7 +37,7 @@ ENV_DEMO_LOGIN = "SHOP_DEMO_LOGIN"
 _SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2**14, 8, 1
 _SALT_BYTES = 16
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-_PROFILE_FIELDS = ("display_name", "age_band", "gender", "job_group")
+_PROFILE_FIELDS = ("display_name", "age_band", "gender", "occupation")
 
 
 def hash_password(password: str) -> str:
@@ -139,7 +139,7 @@ class Accounts:
     # --- 사용자 ---------------------------------------------------------------
     def _user(self, conn: sqlite3.Connection, buyer_id: str) -> dict[str, Any]:
         row = conn.execute(
-            "SELECT b.buyer_id, b.age_band, b.gender, b.job_group, a.email, a.display_name "
+            "SELECT b.buyer_id, b.age_band, b.gender, b.occupation, a.email, a.display_name "
             "FROM buyers b LEFT JOIN accounts a ON a.buyer_id = b.buyer_id "
             "WHERE b.buyer_id = ?",
             (buyer_id,),
@@ -153,7 +153,7 @@ class Accounts:
             "email": row["email"],
             "age_band": row["age_band"],
             "gender": row["gender"],
-            "job_group": row["job_group"],
+            "occupation": row["occupation"],
         }
 
     def _issue(self, conn: sqlite3.Connection, buyer_id: str) -> str:
@@ -178,14 +178,14 @@ class Accounts:
         display_name: str,
         age_band: str | None,
         gender: str | None,
-        job_group: str | None,
+        occupation: str | None,
     ) -> tuple[str, dict[str, Any]]:
         address = normalize_email(email)
         _check_password(password)
         name = _clean_name(display_name)
         _check_code("age_band", age_band, AGE_BANDS)
         _check_code("gender", gender, GENDERS)
-        _check_code("job_group", job_group, JOB_GROUPS)
+        _check_code("occupation", occupation, OCCUPATIONS)
         hashed = hash_password(password)
         now = _stamp(_now())
         try:
@@ -195,8 +195,9 @@ class Accounts:
                 buyer_id = _next_buyer_id(conn)
                 conn.execute(
                     "INSERT INTO buyers(buyer_id, tenant_id, created_at, age_band, gender, "
-                    "job_group, updated_at) VALUES (?,?,?,?,?,?,?)",
-                    (buyer_id, TENANT_ID, now, age_band, gender, job_group, now),
+                    "occupation, updated_at, change_seq) VALUES (?,?,?,?,?,?,?,"
+                    "(SELECT COALESCE(MAX(change_seq), 0) + 1 FROM buyers))",
+                    (buyer_id, TENANT_ID, now, age_band, gender, occupation, now),
                 )
                 conn.execute(
                     "INSERT INTO accounts(buyer_id, email, password_hash, display_name, "
@@ -269,7 +270,7 @@ class Accounts:
             fields = {**fields, "display_name": _clean_name(fields["display_name"])}
         _check_code("age_band", fields.get("age_band"), AGE_BANDS)
         _check_code("gender", fields.get("gender"), GENDERS)
-        _check_code("job_group", fields.get("job_group"), JOB_GROUPS)
+        _check_code("occupation", fields.get("occupation"), OCCUPATIONS)
         with self.db.tx() as conn:
             if not conn.execute("SELECT 1 FROM buyers WHERE buyer_id = ?", (buyer_id,)).fetchone():
                 raise ShopError("BUYER_NOT_FOUND", "구매자를 찾을 수 없다", 404)
@@ -283,14 +284,25 @@ class Accounts:
                     raise ShopError(
                         "INVALID_PROFILE", "계정이 없는 구매자는 이름을 바꿀 수 없다", 422
                     )
-            sets = ", ".join([f"{n} = ?" for n in buyer_cols] + ["updated_at = ?"])
+            sets = ", ".join(
+                [f"{n} = ?" for n in buyer_cols]
+                + [
+                    "updated_at = ?",
+                    "change_seq = (SELECT COALESCE(MAX(change_seq), 0) + 1 FROM buyers)",
+                ]
+            )
             conn.execute(  # 열 이름은 위 고정 목록에서만 온다
                 f"UPDATE buyers SET {sets} WHERE buyer_id = ?",  # noqa: S608
                 [fields[n] for n in buyer_cols] + [_stamp(_now()), buyer_id],
             )
             return self._user(conn, buyer_id)
 
-    def change_password(self, buyer_id: str, current: str, new: str) -> None:
+    def change_password(
+        self, buyer_id: str, current: str, new: str, keep_token: str | None = None
+    ) -> None:
+        """현재 비밀번호가 맞으면 바꾼다(틀리면 401). 바꾸면 이 구매자의 다른 로그인 토큰은
+        모두 끊고 `keep_token`(지금 쓰는 토큰)만 남긴다.
+        """
         _check_password(new)
         with self.db.tx() as conn:
             row = conn.execute(
@@ -299,9 +311,13 @@ class Accounts:
         if row is None:
             raise ShopError("NO_PASSWORD", "비밀번호가 없는 계정이다", 409)
         if not verify_password(current, row["password_hash"]):
-            raise ShopError("INVALID_PASSWORD", "현재 비밀번호가 맞지 않다", 403)
+            raise ShopError("INVALID_PASSWORD", "현재 비밀번호가 맞지 않다", 401)
+        hashed = hash_password(new)
+        keep = _token_hash(keep_token) if keep_token else ""
         with self.db.tx() as conn:
             conn.execute(
-                "UPDATE accounts SET password_hash = ? WHERE buyer_id = ?",
-                (hash_password(new), buyer_id),
+                "UPDATE accounts SET password_hash = ? WHERE buyer_id = ?", (hashed, buyer_id)
+            )
+            conn.execute(
+                "DELETE FROM sessions WHERE buyer_id = ? AND token_hash != ?", (buyer_id, keep)
             )

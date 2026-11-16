@@ -166,11 +166,19 @@ _ADDED_COLUMNS = {
         # 구매자 성별 코드(`female`·`male`·`no_answer`). 비어 있으면 모르는 것이다. 채워 넣지 않는다
         ("gender", "TEXT"),
         # 직업군 코드(선택). 비어 있으면 모르는 것이다
-        ("job_group", "TEXT"),
+        ("occupation", "TEXT"),
         ("updated_at", "TEXT"),
+        # 바뀐 순서(가입·프로필 변경 때마다 최댓값+1). 고객 내보내기가 이 순서로 읽는다. 비면 0
+        ("change_seq", "INTEGER"),
     ),
     # 책 정보(선택). 외부 도서 자료와 ISBN으로 정확히 잇는 데 쓴다. 비어 있으면 모르는 것이다
-    "products": (("isbn13", "TEXT"), ("author", "TEXT"), ("publisher", "TEXT")),
+    "products": (
+        ("isbn13", "TEXT"),
+        ("author", "TEXT"),
+        ("publisher", "TEXT"),
+        # 장르 코드(`genres.GENRES`의 코드 하나). 비어 있으면 모르는 것이다. 채워 넣지 않는다
+        ("genre_code", "TEXT"),
+    ),
     "orders": (
         ("shipping_fee", "INTEGER NOT NULL DEFAULT 0"),
         ("points_used", "INTEGER NOT NULL DEFAULT 0"),
@@ -251,6 +259,10 @@ class Db:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(SCHEMA)
+        buyer_cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(buyers)")}
+        if "job_group" in buyer_cols and "occupation" not in buyer_cols:
+            # 칸 이름이 job_group이던 옛 DB 파일: 값을 그대로 두고 이름만 바꾼다
+            self._conn.execute("ALTER TABLE buyers RENAME COLUMN job_group TO occupation")
         for table, columns in _ADDED_COLUMNS.items():
             have = {row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")}
             for name, definition in columns:

@@ -1,6 +1,7 @@
 """회원 가입·로그인·로그인 토큰(세션): 이메일 유일, ID 발급, 해시 저장, 보유기간 제외."""
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -49,7 +50,7 @@ def test_signup_returns_a_token_and_a_new_buyer_after_the_seed_buyers(client: Te
     assert res.status_code == 201
     data = res.json()["data"]
     assert data["token"] and data["user"]["buyer_id"] == "buy_0031"
-    assert data["user"]["email"] == "neko@example.com" and data["user"]["job_group"] is None
+    assert data["user"]["email"] == "neko@example.com" and data["user"]["occupation"] is None
 
 
 def test_email_is_unique_regardless_of_case_and_spaces(client: TestClient) -> None:
@@ -132,17 +133,17 @@ def test_terms_must_be_agreed(client: TestClient) -> None:
 
 
 def test_optional_attributes_accept_only_codes(client: TestClient) -> None:
-    bad = client.post("/api/shop/auth/signup", json=SIGNUP | {"job_group": "학생"})
+    bad = client.post("/api/shop/auth/signup", json=SIGNUP | {"occupation": "학생"})
     assert bad.status_code == 422
-    old = client.post("/api/shop/auth/signup", json=SIGNUP | {"job_group": "office"})
+    old = client.post("/api/shop/auth/signup", json=SIGNUP | {"occupation": "office"})
     assert old.status_code == 422
     good = client.post(
         "/api/shop/auth/signup",
-        json=SIGNUP | {"job_group": "student", "age_band": "20s", "gender": "female"},
+        json=SIGNUP | {"occupation": "student", "age_band": "20s", "gender": "female"},
     )
     user = good.json()["data"]["user"]
     assert (
-        user["job_group"] == "student" and user["age_band"] == "20s" and user["gender"] == "female"
+        user["occupation"] == "student" and user["age_band"] == "20s" and user["gender"] == "female"
     )
 
 
@@ -185,3 +186,24 @@ def test_retention_keeps_buyers_with_an_account(client: TestClient, db: Db) -> N
     assert user["buyer_id"] in left  # 계정이 있는 오래된 회원은 남는다
     assert "buy_0200" not in left  # 계정 없는 오래된 구매자는 지워진다
     assert sessions["n"] == 0  # 지워진 구매자의 토큰도 같이 지워진다
+
+
+def test_old_db_with_job_group_column_is_renamed_keeping_data(tmp_path: Path) -> None:
+    path = str(tmp_path / "old.db")
+    first = Db(path)
+    first._conn.execute("ALTER TABLE buyers RENAME COLUMN occupation TO job_group")
+    first._conn.execute(
+        "INSERT INTO buyers(buyer_id, tenant_id, created_at, job_group) "
+        "VALUES ('buy_0001', 't', '2026-01-01T00:00:00Z', 'student')"
+    )
+    first._conn.commit()
+    first._conn.close()
+
+    again = Db(path)
+    cols = {r["name"] for r in again._conn.execute("PRAGMA table_info(buyers)")}
+    assert "occupation" in cols and "job_group" not in cols
+    row = again._conn.execute(
+        "SELECT occupation FROM buyers WHERE buyer_id = 'buy_0001'"
+    ).fetchone()
+    assert row["occupation"] == "student"
+    again._conn.close()

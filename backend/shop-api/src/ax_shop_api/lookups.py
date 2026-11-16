@@ -21,6 +21,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import math
 from collections import defaultdict
 from collections.abc import Callable
@@ -50,7 +52,7 @@ BUCKET = timedelta(minutes=5)
 LISTING_WINDOW = timedelta(hours=24)  # 판매자 정보의 "최근 등록" 구간
 MAX_ATTRIBUTION_DAYS = 31  # 유입 출처 주문 조회의 기간 상한
 # 판매 집계(`sales_summary`)로 묶을 수 있는 기준. 정한 값만 받고 다른 값은 422다
-SALES_GROUPS = ("product", "age_band", "category", "gender", "occupation")
+SALES_GROUPS = ("product", "age_band", "category", "gender", "occupation", "genre")
 # 구매자 속성으로 묶는 기준. 이 기준이 든 집계는 작은 묶음의 숫자를 숨긴다(개인이 드러나지 않게)
 SALES_PROFILE_GROUPS = ("age_band", "gender", "occupation")
 # 한 줄의 구매자 수가 이보다 적으면 그 줄의 숫자를 숨긴다
@@ -173,6 +175,59 @@ class Lookups:
             orders=orders, collected_at=self.now(), truncated=len(rows) > query.limit
         )
 
+    def customer_export(
+        self, cursor: str | None, limit: int
+    ) -> tuple[list[dict[str, Any]], str | None, bool]:
+        """고객 내보내기: 가명 ID(`buyer_id`)와 연령대·성별·직업군뿐이다(이름·연락처 없음).
+
+        `(change_seq, buyer_id)`(바뀐 순서, 없으면 0) 순으로 `limit`줄씩 준다. 커서는 마지막 줄의
+        그 두 값을 이은 불투명 문자열이고, 프로필을 고친 구매자는 다음 읽기에 다시 나온다.
+        """
+        after: tuple[int, str] | None = None
+        if cursor:
+            try:
+                raw = base64.urlsafe_b64decode(cursor.encode()).decode()
+                seq_text, _, buyer_id = raw.partition("|")
+                seq = int(seq_text)
+            except (binascii.Error, UnicodeError, ValueError):
+                seq, buyer_id = 0, ""
+            if not buyer_id:
+                raise ShopError("INVALID_CURSOR", "cursor가 올바르지 않다", 400)
+            after = (seq, buyer_id)
+        sql = (
+            "SELECT buyer_id, age_band, gender, occupation, created_at, updated_at, "
+            "COALESCE(change_seq, 0) AS seq FROM buyers WHERE tenant_id = ?"
+        )
+        params: list[Any] = [TENANT_ID]
+        if after:
+            sql += (
+                " AND (COALESCE(change_seq, 0) > ?"
+                " OR (COALESCE(change_seq, 0) = ? AND buyer_id > ?))"
+            )
+            params += [after[0], after[0], after[1]]
+        sql += " ORDER BY COALESCE(change_seq, 0), buyer_id LIMIT ?"
+        params.append(limit + 1)
+        with self.db.tx() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        page = rows[:limit]
+        data = [
+            {
+                "buyer_id": r["buyer_id"],
+                "age_band": r["age_band"],
+                "gender": r["gender"],
+                "occupation": r["occupation"],
+                "created_at": r["created_at"],
+                "updated_at": r["updated_at"],
+            }
+            for r in page
+        ]
+        next_cursor = cursor or None  # 빈 페이지면 받은 커서를 그대로 돌려준다
+        if page:
+            last = page[-1]
+            raw = f"{last['seq']}|{last['buyer_id']}"
+            next_cursor = base64.urlsafe_b64encode(raw.encode()).decode()
+        return data, next_cursor, len(rows) > limit
+
     def attributed_orders(
         self,
         since: datetime,
@@ -259,8 +314,8 @@ class Lookups:
 
         접수 시각이 `since` 이상 `until` 미만인 주문이다.
 
-        `group_by`는 쉼표로 이은 `product`·`age_band`·`category`·`gender`·`occupation`
-        (정한 값만, 다른 값은 422).
+        `group_by`는 쉼표로 이은 `product`·`age_band`·`category`·`gender`·`occupation`·`genre`
+        (정한 값만, 다른 값은 422). `genre`는 상품 장르 코드(`genre_code`, 모르면 null)로 묶는다.
         한 줄은 기준 값의 조합 하나이고 두 판매 수량을 같이 준다.
         - `gross_qty`: 결제가 끝난 주문의 판매 수량 (클레임 비율의 분모처럼 환불된 주문도 센다)
         - `net_qty`: 그중 전액 환불된 주문을 뺀 수량 (`attributed_orders`와 같은 기준.
@@ -283,10 +338,9 @@ class Lookups:
             "product": ("i.product_id", "product_id"),
             "age_band": ("b.age_band", "age_band"),
             "gender": ("b.gender", "gender"),
-            # 직업군은 회원 가입 쪽(accounts)이 `buyers.job_group`으로 저장한다(`occupation`으로
-            # 이름을 바꾸는 작업이 따로 있다). 바뀌면 이 열 이름만 `b.occupation`으로 고친다
-            "occupation": ("b.job_group", "occupation"),
+            "occupation": ("b.occupation", "occupation"),
             "category": ("pr.category_code", "category_code"),
+            "genre": ("pr.genre_code", "genre_code"),  # 상품 장르 코드(모르면 null)
         }
         select = ", ".join(f"{columns[g][0]} AS {columns[g][1]}" for g in groups)
         by = ", ".join(columns[g][0] for g in groups)  # 별칭이 아니라 열로 묶는다(상품 표와 겹침)
@@ -294,7 +348,7 @@ class Lookups:
         profile = any(g in SALES_PROFILE_GROUPS for g in groups)
         if profile:
             joins += " LEFT JOIN buyers b ON b.buyer_id = k.buyer_id"
-        if "category" in groups:
+        if "category" in groups or "genre" in groups:
             joins += " LEFT JOIN products pr ON pr.product_id = i.product_id"
         sql = (  # noqa: S608 - 열 이름은 위 고정 표에서만 온다 (고객 입력이 아니다)
             "WITH k AS (SELECT o.order_id, o.buyer_id, "

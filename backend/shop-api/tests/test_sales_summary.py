@@ -218,3 +218,27 @@ def test_the_response_has_no_personal_identifiers(client: TestClient, db: Db) ->
     }
     assert data["rows"] and all(set(r) <= allowed for r in data["rows"])
     assert set(data) == {"from", "to", "group_by", "rows", "collected_at"}
+
+
+def test_group_by_genre_uses_the_product_genre_code_and_keeps_unknown_as_null(
+    client: TestClient, db: Db
+) -> None:
+    books = [
+        p["product_id"] for p in client.get("/api/shop/products").json()["data"] if p["active"]
+    ][:3]
+    with db.tx() as conn:
+        conn.execute("UPDATE products SET genre_code = 'novel' WHERE product_id = ?", (books[0],))
+        conn.execute("UPDATE products SET genre_code = 'it' WHERE product_id = ?", (books[1],))
+        conn.execute("UPDATE products SET genre_code = NULL WHERE product_id = ?", (books[2],))
+    _order(client, db, books[0], 2)
+    _order(client, db, books[0], 1, buyer="buy_0002")
+    _order(client, db, books[1], 4)
+    _order(client, db, books[2], 5)
+    rows = _get(client, group_by="genre")["rows"]
+    by = {r["genre_code"]: r for r in rows}
+    assert by["novel"]["gross_qty"] == 3 and by["novel"]["order_count"] == 2
+    assert by["it"]["gross_qty"] == 4
+    assert by[None]["gross_qty"] == 5  # 장르를 모르는 상품은 지어내지 않고 null로 센다
+    assert all("suppressed" not in r for r in rows)  # 상품 속성이라 작은 묶음 숨기기는 없다
+    both = _get(client, group_by="genre,age_band")["rows"]
+    assert all("genre_code" in r and "age_band" in r for r in both)
