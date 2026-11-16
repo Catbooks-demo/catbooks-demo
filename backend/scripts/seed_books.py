@@ -41,7 +41,7 @@ BACKEND = Path(__file__).resolve().parents[1]
 DEFAULT_ENV_FILES = (BACKEND / ".env", BACKEND / "shop-api" / ".env")
 DEFAULT_CACHE = BACKEND / ".cache" / "data4library"
 DEFAULT_OUT = BACKEND / "shop-api" / "src" / "ax_shop_api" / "catalog" / "books.json"
-DEFAULT_URL = "http://data4library.kr/api"
+DEFAULT_URL = "https://data4library.kr/api"  # 키가 주소에 실리므로 https로 보낸다
 KEY_NAME = "DATA4LIBRARY_API_KEY"
 SOURCE = "도서관 정보나루(data4library.kr)"
 TITLE_MAX = 200
@@ -182,6 +182,8 @@ def _read_env_file(path: Path) -> str | None:
             value = value.strip()
             if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
                 value = value[1:-1]
+            else:
+                value = re.split(r"\s#", value, maxsplit=1)[0].strip()  # 따옴표 없는 값의 ` # 설명`
             return value or None
     return None
 
@@ -240,7 +242,12 @@ class Client:
         self._last = 0.0
 
     def _scrub(self, text: str) -> str:
-        return text.replace(self._key, "***") if self._key else text
+        if not self._key:
+            return text
+        for form in {self._key, urllib.parse.quote(self._key, safe=""),
+                     urllib.parse.quote_plus(self._key)}:  # fmt: skip
+            text = text.replace(form, "***")
+        return text
 
     def _cache_path(self, api: str, params: dict[str, str]) -> Path:
         canon = urllib.parse.urlencode(sorted(params.items()))
@@ -251,8 +258,13 @@ class Client:
         """`api`를 `params`(키 제외)로 부른다. 캐시에 있으면 그 값을 쓴다."""
         path = self._cache_path(api, params)
         if path.exists():
-            self.cache_hits += 1
-            return json.loads(path.read_text(encoding="utf-8"))
+            try:
+                cached = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                cached = None  # 깨진 캐시 파일은 없는 것으로 보고 다시 받는다
+            if isinstance(cached, dict):
+                self.cache_hits += 1
+                return cached
         shown = f"{api}?{urllib.parse.urlencode(sorted(params.items()))}"
         query = urllib.parse.urlencode({"authKey": self._key, **params, "format": "json"})
         url = f"{self.base_url}/{api}?{query}"
@@ -281,9 +293,13 @@ class Client:
                 if error:
                     # 키 거부·호출 한도 등: 다시 해도 같으므로 멈춘다(캐시에 넣지 않는다)
                     raise ApiError(self._scrub(f"API 오류 ({shown}): {error}"))
+                # 응답에 키가 되돌아와도 캐시에는 남기지 않는다. 중간에 끊겨도 반쪽 파일이 없게 쓴다
+                text = self._scrub(json.dumps(data, ensure_ascii=False))
                 self.cache_dir.mkdir(parents=True, exist_ok=True)
-                path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-                return data
+                tmp = path.with_suffix(".json.tmp")
+                tmp.write_text(text, encoding="utf-8", newline="\n")
+                os.replace(tmp, path)
+                return json.loads(text)
             if attempt < self.retries:
                 self._sleep(2.0 * 2**attempt)
         raise ApiError(f"{shown} 호출 실패 ({self.retries + 1}회): {last_error}")

@@ -126,3 +126,14 @@ def test_shipped_catalog_files_are_valid() -> None:
     assert counts["stationery_added"] == 45
     with db.tx() as conn:
         assert conn.execute("SELECT COUNT(*) FROM products").fetchone()[0] == 8
+
+
+def test_cli_without_books_json_loads_stationery(catalog: Path, tmp_path: Path, capsys) -> None:
+    (catalog / "books.json").unlink()
+    path = str(tmp_path / "shop.db")
+    assert main(["--db", path, "--catalog-dir", str(catalog)]) == 0
+    out = capsys.readouterr().out
+    assert "books.json 없음: 책은 건너뛰고 문구만 넣어요" in out
+    assert "문구 넣음 2개" in out
+    with Db(path).tx() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM products").fetchone()[0] == 8 + 2

@@ -172,7 +172,7 @@ python -m ax_shop_api.retention purge-buyer <buyer_id> [--apply] [--include-reta
 도서관 정보나루(data4library.kr) Open API의 인기대출도서·도서 상세로 장르별 실제 책(약 30권씩, 13개 도서 장르)을 받아 상품으로 넣는다. 문구 45개(필기구·노트·다꾸 15개씩)는 공개 자료가 없어 일반 이름으로 만든 데모 상품이다.
 - 키: `backend/.env`에 `DATA4LIBRARY_API_KEY=...`(커밋 금지). 스크립트는 그 한 줄만 읽고 키를 출력·저장하지 않는다.
 - 목록 다시 받기(가끔, 사람이): `cd backend && uv run python scripts/seed_books.py` → `shop-api/src/ax_shop_api/catalog/books.json`을 다시 쓴다. 1초에 한 번 이하로 부르고 전체 호출은 `--max-calls`(기본 600)까지, 응답은 `backend/.cache/data4library/`에 캐시해 이어서 한다. KDC → 장르 표는 스크립트 안에 있다(분류 못 하는 책은 뺀다).
-- DB에 넣기: `SHOP_DB_PATH=... uv run python -m ax_shop_api.load_catalog [--dry-run]`. 같은 ISBN의 책·같은 이름의 문구는 건너뛰어 여러 번 돌려도 같고, 시드 상품 prd_0001~0008과 `seed.py` 기본 동작은 그대로다. 한 트랜잭션이다.
+- DB에 넣기: `SHOP_DB_PATH=... uv run python -m ax_shop_api.load_catalog [--dry-run]`. 같은 ISBN의 책·같은 이름의 문구는 건너뛰어 여러 번 돌려도 같고, 시드 상품 prd_0001~0008과 `seed.py` 기본 동작은 그대로다. 한 트랜잭션이지만 서버를 멈춘 때(또는 주문이 없는 조용한 때) 돌린다. `books.json`이 없으면 책은 건너뛰고 문구만 넣는다.
 - 출처: 책 제목·저자·출판사·분류·소개는 **도서관 정보나루**에서 왔다(쇼핑몰 하단에 출처 표시). **가격·재고는 API에 없어 ISBN으로 정한 데모 값**이고, 표지 그림은 받지 않는다(쇼핑몰이 그리는 표지).
 
 ## 5. 하지 않는 것

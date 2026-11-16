@@ -6,6 +6,7 @@ KDC→장르, 데모 가격, 키 숨기기를 본다. 네트워크 없음.
 import importlib.util
 import json
 import urllib.error
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -202,3 +203,47 @@ def test_end_to_end_with_stub(tmp_path: Path) -> None:
     assert first["kdc"] == "813.7" and first["genre_code"] == "novel"
     assert first["price"] == seed_books.demo_price("9788936434120", "novel")
     assert FAKE_KEY not in out.read_text(encoding="utf-8")
+
+
+def test_cache_scrubs_key_echoed_in_body(tmp_path: Path) -> None:
+    key = "k+y/with=chars"
+
+    def http_get(url, timeout):
+        quoted = urllib.parse.quote(key, safe="")
+        body = {"response": {"request": {"authKey": key, "url": f"?authKey={quoted}"}, "docs": []}}
+        return json.dumps(body).encode()
+
+    client = seed_books.Client(key, cache_dir=tmp_path / "cache", min_interval=0,
+                               http_get=http_get, sleep=lambda s: None)  # fmt: skip
+    data = client.get("loanItemSrch", {"kdc": "8"})
+    assert key not in json.dumps(data)
+    (path,) = (tmp_path / "cache").iterdir()
+    text = path.read_text(encoding="utf-8")
+    assert key not in text and urllib.parse.quote(key, safe="") not in text
+    assert path.suffix == ".json"
+
+
+def test_corrupt_cache_is_refetched(tmp_path: Path) -> None:
+    calls = []
+
+    def http_get(url, timeout):
+        calls.append(url)
+        return b'{"response": {"docs": []}}'
+
+    client = _client(tmp_path, http_get)
+    client.get("loanItemSrch", {"kdc": "1"})
+    (path,) = (tmp_path / "cache").iterdir()
+    path.write_text('{"response": ', encoding="utf-8")  # 중간에 끊긴 파일
+    assert client.get("loanItemSrch", {"kdc": "1"}) == {"response": {"docs": []}}
+    assert len(calls) == 2
+    assert json.loads(path.read_text(encoding="utf-8")) == {"response": {"docs": []}}
+
+
+def test_env_inline_comment_is_stripped(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("DATA4LIBRARY_API_KEY", raising=False)
+    monkeypatch.setattr(seed_books, "DEFAULT_ENV_FILES", ())
+    env = tmp_path / ".env"
+    env.write_text("DATA4LIBRARY_API_KEY=abc123  # 정보나루 키\n", encoding="utf-8")
+    assert seed_books.load_key([env]) == "abc123"
+    env.write_text("DATA4LIBRARY_API_KEY='a #b'\n", encoding="utf-8")
+    assert seed_books.load_key([env]) == "a #b"

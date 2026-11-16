@@ -58,7 +58,7 @@
    "description": "향나무 원목 육각 연필 12자루. 지우개 없음."
   },
   {
-   "name": "4B 스케치 연필 세트 6자루",
+   "name": "스케치 연필 세트 6자루",
    "genre_code": "writing",
    "category_code": "stationery",
    "price": 7200,
@@ -90,12 +90,12 @@
    "description": "캘리그래피·손글씨용 붓펜. 검정 잉크 2자루."
   },
   {
-   "name": "수성 사인펜 24색",
+   "name": "수성 펜 24색",
    "genre_code": "writing",
    "category_code": "stationery",
    "price": 8900,
    "stock": 117,
-   "description": "선명한 수성 사인펜 24색. 그림 그리기와 필기 겸용."
+   "description": "선명한 수성 펜 24색. 그림 그리기와 필기 겸용."
   },
   {
    "name": "지워지는 볼펜 0.5mm 5색",

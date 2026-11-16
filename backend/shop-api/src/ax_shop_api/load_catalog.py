@@ -110,8 +110,10 @@ def load_catalog(db: Db, catalog_dir: Path = CATALOG_DIR, dry_run: bool = False)
                 if (row["isbn13"] in have_isbn) if kind == "books" else (row["name"] in have_names):
                     counts[f"{kind}_skipped"] += 1
                     continue
-                have_isbn.add(row["isbn13"])
-                have_names.add(row["name"])
+                if kind == "books":
+                    have_isbn.add(row["isbn13"])
+                else:
+                    have_names.add(row["name"])
                 counts[f"{kind}_added"] += 1
                 if dry_run:
                     continue
@@ -134,6 +136,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", help="DB 파일(기본 SHOP_DB_PATH)")
     parser.add_argument("--catalog-dir", type=Path, default=CATALOG_DIR)
     args = parser.parse_args(argv)
+    if not (args.catalog_dir / "books.json").exists():
+        print("books.json 없음: 책은 건너뛰고 문구만 넣어요 (scripts/seed_books.py로 만들어요)")
     db = Db(args.db)
     if not db.is_file:
         print("주의: DB가 메모리(:memory:)다. SHOP_DB_PATH나 --db로 파일을 준다")
