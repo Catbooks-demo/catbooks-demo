@@ -180,6 +180,8 @@ _ADDED_COLUMNS = {
         ("publisher", "TEXT"),
         # 장르 코드(`genres.GENRES`의 코드 하나). 비어 있으면 모르는 것이다. 채워 넣지 않는다
         ("genre_code", "TEXT"),
+        # 상품 소개(최대 4000자). 비어 있으면 모르는 것이다
+        ("description", "TEXT"),
     ),
     "orders": (
         ("shipping_fee", "INTEGER NOT NULL DEFAULT 0"),

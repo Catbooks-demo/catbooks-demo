@@ -82,6 +82,7 @@ class BookInfoIn(BaseModel):
     author: str | None = Field(default=None, max_length=book_info.AUTHOR_MAX)
     publisher: str | None = Field(default=None, max_length=book_info.PUBLISHER_MAX)
     genre_code: str | None = None  # `genres.GENRES`의 코드 하나(아니면 422), 비우면 모름
+    description: str | None = Field(default=None, max_length=book_info.DESCRIPTION_MAX)
 
     @field_validator("genre_code", mode="before")
     @classmethod
@@ -95,7 +96,7 @@ class BookInfoIn(BaseModel):
             book_info.normalize_isbn13(value) if isinstance(value, str) or value is None else value
         )
 
-    @field_validator("author", "publisher", mode="before")
+    @field_validator("author", "publisher", "description", mode="before")
     @classmethod
     def _text(cls, value: Any) -> Any:
         return book_info.clean_text(value) if isinstance(value, str) or value is None else value
@@ -705,6 +706,14 @@ def _order_scope(request: Request) -> str | None:
     return None
 
 
+def _genre_filter(value: str | None) -> str | None:
+    """목록·베스트의 `genre` 쿼리. 모르는 코드는 422, 빈 글은 거르지 않는다."""
+    try:
+        return genres.normalize_genre(value)
+    except ValueError as err:
+        raise ShopError("INVALID_GENRE", str(err), 422) from err
+
+
 def _ok(data: Any, **meta: Any) -> dict[str, Any]:
     return {"data": data, "meta": meta}
 
@@ -932,8 +941,42 @@ def create_app(
         return _ok(shop.list_sellers())
 
     @app.get("/api/shop/products")
-    async def list_products(seller_id: str | None = None, category_code: str | None = None) -> dict:
-        return _ok(shop.list_products(seller_id, category_code))
+    def list_products(
+        seller_id: str | None = None,
+        category_code: str | None = None,
+        q: str | None = None,
+        genre: str | None = None,
+        sort: Literal["popular", "new", "price_asc", "price_desc"] | None = None,
+        page: int | None = Query(default=None, ge=1),
+        size: int = Query(default=24, ge=1, le=60),
+    ) -> dict:
+        """쿼리가 없으면 활성 상품 전체 배열(지금 그대로). `page`가 있으면 `meta`에 total 등."""
+        items, total = shop.list_products(
+            seller_id,
+            category_code,
+            q=q,
+            genre=_genre_filter(genre),
+            sort=sort,
+            page=page,
+            size=size,
+        )
+        if page is None:
+            return _ok(items)
+        return _ok(items, total=total, page=page, size=size)
+
+    @app.get("/api/shop/genres")
+    def list_genres() -> dict:
+        """장르 코드·이름과 판매 중 상품 수(`genres.GENRES` 순서). 토큰 없음."""
+        return _ok(shop.list_genres())
+
+    @app.get("/api/shop/products/best")
+    def best_products(
+        genre: str | None = None,
+        days: int = Query(default=30, ge=1, le=93),
+        limit: int = Query(default=10, ge=1, le=50),
+    ) -> dict:
+        """최근 `days`일 결제 수량이 많은 상품(각 `sold_qty`). 토큰 없음, 잠깐 캐시한다."""
+        return _ok(shop.best_products(_genre_filter(genre), days, limit))
 
     @app.get("/api/shop/products/{product_id}")
     async def get_product(product_id: str) -> dict:
@@ -960,7 +1003,13 @@ def create_app(
         product_id: str, body: ProductPatch, _: str = Depends(_caller(PRODUCT_WRITERS))
     ) -> dict:
         changes = body.model_dump(exclude_none=True)
-        for key in ("isbn13", "author", "publisher", "genre_code"):  # 보냈으면 null도 "지움"이다
+        for key in (
+            "isbn13",
+            "author",
+            "publisher",
+            "genre_code",
+            "description",
+        ):  # 보냈으면 null도 "지움"이다
             if key in body.model_fields_set:
                 changes[key] = getattr(body, key)
         return _ok(shop.update_product(product_id, changes))
