@@ -152,6 +152,8 @@ _ADDED_COLUMNS = {
     # 구매자 연령대 구간(`10s`·`20s`·`30s`·`40s`·`50s_plus`). 생년월일은 받지 않고 구간만 저장한다.
     # 비어 있으면 모르는 것이다 (옛 구매자·입력 전 구매자). 채워 넣지 않는다
     "buyers": (("age_band", "TEXT"),),
+    # 책 정보(선택). 외부 도서 자료와 ISBN으로 정확히 잇는 데 쓴다. 비어 있으면 모르는 것이다
+    "products": (("isbn13", "TEXT"), ("author", "TEXT"), ("publisher", "TEXT")),
     "orders": (
         ("shipping_fee", "INTEGER NOT NULL DEFAULT 0"),
         ("points_used", "INTEGER NOT NULL DEFAULT 0"),

@@ -50,7 +50,9 @@ def seed(db: Db) -> bool:
             )
         for product_id, seller_id, name, category, price, stock in PRODUCTS:
             conn.execute(
-                "INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, ?, ?)",
+                "INSERT INTO products (product_id, seller_id, name, category_code, price, stock,"
+                " active, tenant_id, context_id, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, ?, ?)",
                 (product_id, seller_id, name, category, price, stock, TENANT_ID, now, now),
             )
         # 시드가 쓴 번호 다음부터 새 ID를 발급한다
