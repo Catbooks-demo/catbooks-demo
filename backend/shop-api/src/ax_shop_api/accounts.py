@@ -290,7 +290,12 @@ class Accounts:
             )
             return self._user(conn, buyer_id)
 
-    def change_password(self, buyer_id: str, current: str, new: str) -> None:
+    def change_password(
+        self, buyer_id: str, current: str, new: str, keep_token: str | None = None
+    ) -> None:
+        """현재 비밀번호가 맞으면 바꾼다(틀리면 401). 바꾸면 이 구매자의 다른 로그인 토큰은
+        모두 끊고 `keep_token`(지금 쓰는 토큰)만 남긴다.
+        """
         _check_password(new)
         with self.db.tx() as conn:
             row = conn.execute(
@@ -299,9 +304,13 @@ class Accounts:
         if row is None:
             raise ShopError("NO_PASSWORD", "비밀번호가 없는 계정이다", 409)
         if not verify_password(current, row["password_hash"]):
-            raise ShopError("INVALID_PASSWORD", "현재 비밀번호가 맞지 않다", 403)
+            raise ShopError("INVALID_PASSWORD", "현재 비밀번호가 맞지 않다", 401)
+        hashed = hash_password(new)
+        keep = _token_hash(keep_token) if keep_token else ""
         with self.db.tx() as conn:
             conn.execute(
-                "UPDATE accounts SET password_hash = ? WHERE buyer_id = ?",
-                (hash_password(new), buyer_id),
+                "UPDATE accounts SET password_hash = ? WHERE buyer_id = ?", (hashed, buyer_id)
+            )
+            conn.execute(
+                "DELETE FROM sessions WHERE buyer_id = ? AND token_hash != ?", (buyer_id, keep)
             )

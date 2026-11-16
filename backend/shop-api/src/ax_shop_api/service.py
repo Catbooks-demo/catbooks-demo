@@ -824,6 +824,14 @@ class Shop:
             "order_name": order_name,
         }
 
+    def attempt_order_id(self, toss_order_id: str) -> str | None:
+        """결제 시도의 주문 번호(본인 확인용). 없는 시도면 None."""
+        with self.db.tx() as conn:
+            row = conn.execute(
+                "SELECT order_id FROM payment_attempts WHERE toss_order_id = ?", (toss_order_id,)
+            ).fetchone()
+        return row["order_id"] if row else None
+
     def toss_start(self, toss_order_id: str, amount: int) -> AttemptStart:
         """승인 전에 확인한다. 끝난 시도는 처음 결과를, 금액이 다르면 400을 돌려준다."""
         with self.db.tx() as conn:

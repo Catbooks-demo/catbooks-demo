@@ -17,8 +17,8 @@
 | --- | --- |
 | `GET /api/shop/sellers`, `GET /api/shop/products[?seller_id&category_code]`, `GET /api/shop/products/{id}` | 판매자·상품 조회. 상품에 `isbn13`·`author`·`publisher`(책 정보, 모르면 `null`)가 있다 |
 | `POST /api/shop/products`, `PATCH /api/shop/products/{id}` | 상품 등록·수정(판매 중지는 `active=false`). 선택 **책 정보** `isbn13`·`author`·`publisher`를 받는다: `isbn13`은 하이픈·공백을 뺀 13자리 숫자이고 `978`·`979`로 시작하며 확인 숫자가 맞아야 한다(아니면 422, 하이픈은 지우고 저장), `author`·`publisher`는 100자까지(앞뒤 공백은 지운다). 빈 글·`null`은 "모른다"이고 `PATCH`에서는 지운다(칸을 안 보내면 그대로). 판매자 입점(`POST /api/shop/sellers`)의 첫 상품도 같은 칸을 받는다. 시드 상품에는 넣지 않았다(값을 지어내지 않는다). 쓰기 권한은 기존과 같다(`admin` 등 상품 쓰기 토큰) |
-| `GET /api/shop/users`, `GET /api/shop/users/{buyer_id}`, `POST /api/shop/sessions` | 쇼핑몰 화면용 데모 사용자. 가명 ID(`buyer_id`)와 표시 이름(`display_name`)뿐이고 비밀번호·토큰은 없다. `sessions`는 `{buyer_id}`를 받아 `{user}`를 돌려주는 "선택"이며 서버는 세션을 저장하지 않는다. 한 명 조회·`sessions`의 사용자에는 `age_band`(연령대 구간 `10s`·`20s`·`30s`·`40s`·`50s_plus`, 모르면 `null`)와 `gender`(성별 코드 `female`·`male`·`no_answer`, 모르면 `null`)가 있고, 전체 목록에는 싣지 않는다 |
-| `PATCH /api/shop/users/{buyer_id}` | 구매자 연령대 구간·성별 코드를 정한다. **보낸 칸만 바꾸고**(안 보낸 칸은 그대로) 본문 `{age_band, gender}` 중 하나는 있어야 한다(없으면 422). `gender`는 `female`·`male`·`no_answer` 중 하나이거나 `null`(지움)이고 직업·생년월일은 받지 않는다. 아래 `age_band`는 `10s`·`20s`·`30s`·`40s`·`50s_plus` 중 하나이거나 `null`(지움)이고 칸이 없거나 다른 값·다른 키는 422다. 생년월일·나이는 받지 않고 구간만 저장한다(개인정보 부담을 줄인다). 없는 구매자는 404 `BUYER_NOT_FOUND`. 토큰·비밀번호는 없다(데모): **누구나 바꿀 수 있다(데모)** — `GET`으로 읽는 것도 같다. 연령대는 개인정보라 실제 서비스로 옮길 때는 본인 확인을 붙여야 한다. 값이 들어오기 전의 구매자는 `age_band`가 `null`이고 채워 넣지 않는다 |
+| `GET /api/shop/users`, `GET /api/shop/users/{buyer_id}`, `POST /api/shop/sessions` | 쇼핑몰 화면용 구매자. 목록은 `admin` 토큰만, 한 명 조회는 본인(로그인 토큰) 또는 `admin`만이다(아래 3-1). `sessions`는 `SHOP_DEMO_LOGIN=on`일 때만 `{buyer_id}`를 받아 비밀번호 없는 데모 로그인 `{user, token}`을 주고, 꺼져 있으면 404다(`SHOP_BUYER_AUTH=legacy`에서는 옛 동작대로 토큰 없이 `{user}`만 준다). 한 명 조회·`sessions`의 사용자에는 `age_band`(연령대 구간 `10s`·`20s`·`30s`·`40s`·`50s_plus`, 모르면 `null`)와 `gender`(성별 코드 `female`·`male`·`no_answer`, 모르면 `null`)가 있고, 전체 목록에는 싣지 않는다 |
+| `PATCH /api/shop/users/{buyer_id}` | 구매자 연령대 구간·성별 코드를 정한다. **보낸 칸만 바꾸고**(안 보낸 칸은 그대로) 본문 `{age_band, gender}` 중 하나는 있어야 한다(없으면 422). `gender`는 `female`·`male`·`no_answer` 중 하나이거나 `null`(지움)이고 직업·생년월일은 받지 않는다. 아래 `age_band`는 `10s`·`20s`·`30s`·`40s`·`50s_plus` 중 하나이거나 `null`(지움)이고 칸이 없거나 다른 값·다른 키는 422다. 생년월일·나이는 받지 않고 구간만 저장한다(개인정보 부담을 줄인다). 없는 구매자는 404 `BUYER_NOT_FOUND`. 본인(로그인 토큰) 또는 `admin` 토큰만 바꿀 수 있고(`GET`으로 읽는 것도 같다, 아래 3-1) 바꾸면 `buyers.updated_at`을 적는다. 값이 들어오기 전의 구매자는 `age_band`가 `null`이고 채워 넣지 않는다 |
 | `GET /api/shop/categories` | 판매 중 상품의 카테고리(`category_code`·`name`·`product_count`). 표시 이름을 모르는 코드는 `name`이 null |
 | `POST /api/shop/cart/price` | 장바구니 가격 미리보기(저장·재고 차감 없음). `items`, 선택 `points_used`, 선택 `coupon_id`·`coupon_units`(기본 1)·`buyer_id`. 상품 합계 → 배송비(5만 원 미만 3,000원) → 쿠폰 → 적립금 순서. 쿠폰은 `coupon_id`와 `buyer_id`가 함께 있을 때만 검증해 `coupon_discount`를 계산하고(없으면 0, `buyer_id` 없이 쿠폰만 주면 400 `BUYER_REQUIRED`) 장수는 차감하지 않는다. `payable_amount`는 `POST /orders`의 `total_amount`와 같다 |
 | `POST /api/shop/orders` | 주문. 가격·총액은 DB 값으로 계산하고 재고를 차감한다. 선택 `points_used`(원, 품목 합계 이하)를 받는다. 선택 `coupon_id`와 `coupon_units`(기본 1)로 **본인의 쿠폰 한 건**을 쓴다(`campaign`·`compensation` 모두). 할인은 `min(장수×unit_value, 상품 합계)`로 배송비는 할인하지 않고, 적립금은 쿠폰을 뺀 상품 금액을 넘을 수 없다. 다른 구매자의 쿠폰은 403 `COUPON_NOT_YOURS`, 없는 쿠폰은 404 `COUPON_NOT_FOUND`, 만료는 409 `COUPON_EXPIRED`, 남은 장수 초과는 409 `COUPON_UNITS_EXCEEDED`다. 응답에 `coupon_id`·`coupon_units`·`coupon_discount`, 품목에 `coupon_share`(할인을 품목 금액 비율로 나눈 몫)가 있고 `paid_amount` = 단가×수량 − `points_share` − `coupon_share`다. 선택 `idempotency_key`(1~128자)를 주면 같은 구매자의 같은 키는 주문 하나다: 다시 오면 재고와 쿠폰 장수를 건드리지 않고 처음 주문을 200으로 돌려주고(`meta.replayed: true`, 새로 만들면 201), 상품·수량·포인트·쿠폰이 다르면 409 `IDEMPOTENCY_MISMATCH`다. 키는 주문 한 건당 하나를 만들어 재시도에만 다시 보낸다(매번 새 키를 보내면 보호가 안 되고, 새 주문에 같은 키를 쓰면 처음 주문이 돌아온다). 키가 없으면 매번 새 주문이다. `total_amount` = 품목 합계 − 포인트 + `shipping_fee`(품목 합계 5만 원 미만 3,000원, 이상 0원)로 **실제 결제(현금) 금액**이고 결제 `amount`와 같다 |
@@ -75,6 +75,27 @@
 - 발행 이벤트(공통 봉투, `source: shop-api`, `context_id: null`, 이벤트 버스는 `events.publish`만 사용): `order.created`, `order.cancelled`, `payment.succeeded`, `payment.failed`, `shop.degraded`, `shop.recovered`. 이벤트는 주문·결제와 같은 트랜잭션에 outbox로 저장하고 저장 뒤 발행한다(최소 한 번 전달, `event_id`는 키에서 만든다).
 - 이벤트 `data` 모델은 계약(`contracts`)에 있으면 그것을 쓴다(`payment.failed`). 나머지 모델은 `to:contracts` 요청(#11)으로 추가 중이라, 반영되면 계약 모델로 교체한다.
 - OpenAPI: `contracts/openapi/shop-api.json`은 CI가 자동 생성한다.
+## 3-1. 회원 로그인·구매자 본인 확인
+- 가입·로그인: `POST /api/shop/auth/signup`·`/auth/login`이 로그인 토큰을 준다(DB에는 sha256만 둔다). `POST /auth/logout`은 보낸 토큰을 끊는다. 토큰은 `Authorization: Bearer <토큰>`으로 보낸다.
+- 구매자 경로(`POST /orders`, `POST /orders/{id}/payments`, `.../payments/toss/prepare`, `POST /payments/toss/confirm`, `POST /orders/{id}/cancel`, `POST·GET /claims`, `POST·GET /inquiries`, `GET /inquiries/{id}`, `POST /inquiries/{id}/feedback`, `POST·GET /ideas`, 쿠폰을 쓸 때의 `POST /cart/price`, `GET·PATCH /users/{buyer_id}`)는 **로그인 토큰이 구매자를 정한다**. 본문·쿼리의 `buyer_id`는 선택이고, 보내면 토큰의 구매자와 같아야 한다(다르면 403 `BUYER_MISMATCH`). 남의 주문을 결제·취소하려 하면 없는 주문과 같은 404다.
+  - `admin` 토큰은 `buyer_id`를 함께 보내 구매자를 대신할 수 있다(가상 주문 스크립트·운영자, `buyer_id`가 없으면 422 `BUYER_REQUIRED`). 다른 서비스 토큰은 403.
+  - 토큰이 없으면 401 `LOGIN_REQUIRED`(`legacy`에서는 옛 동작대로 요청의 `buyer_id`). 알 수 없는·끊긴 토큰은 어느 모드에서나 401 `UNAUTHORIZED`.
+- 주문 조회 `GET /orders`·`GET /orders/{id}`: 구매자 토큰이면 본인 주문만(남의 주문은 404, 다른 `buyer_id`를 물으면 403), 서비스 토큰·연결 키면 전체, 토큰이 없으면 `SHOP_ORDERS_PUBLIC_READ=on`(기본)일 때 지금처럼 전체(AXcellent 재무·고객지원이 이렇게 읽는다)·`off`면 401. 알 수 없는 토큰은 401.
+- `GET /api/shop/users`(목록)는 `admin` 토큰만(`legacy`에서 토큰 없이 부르면 옛 동작).
+- 내 정보(구매자 로그인 토큰만, 없으면 401 `LOGIN_REQUIRED`, 서비스 토큰은 403):
+  - `GET /api/shop/me` → 사용자 `{buyer_id, display_name, email, age_band, gender, job_group}`.
+  - `PATCH /api/shop/me` `{display_name?, age_band?, gender?, job_group?}` → 보낸 칸만 바꾼다(코드값만, null이면 지움, 이름은 지울 수 없다, 칸이 없으면 422). `buyers.updated_at`을 적는다.
+  - `POST /api/shop/me/password` `{current, new}` → 현재 비밀번호가 틀리면 401 `INVALID_PASSWORD`, 새 비밀번호는 8~128자(422 `WEAK_PASSWORD`), 비밀번호가 없는 데모 구매자는 409 `NO_PASSWORD`. 바꾸면 **지금 토큰을 뺀 이 구매자의 다른 로그인을 모두 끊는다**.
+
+| 환경변수 | 기본값 | 뜻 |
+| --- | --- | --- |
+| `SHOP_BUYER_AUTH` | `required` | `required`: 구매자 경로는 로그인 토큰(또는 `admin` 대신하기)만. `legacy`: 토큰이 없으면 요청의 `buyer_id`를 믿는다(옛 동작, 시험·전환 기간용). 모르는 값은 `required` |
+| `SHOP_ORDERS_PUBLIC_READ` | `on` | `off`면 토큰 없는 주문 조회를 401로 막는다 |
+| `SHOP_DEMO_LOGIN` | (꺼짐) | `on`일 때만 비밀번호 없는 데모 로그인(`POST /auth/demo-login`, `POST /sessions`)이 열린다. 배포에는 넣지 않는다 |
+| `SHOP_SESSION_DAYS` | 30 | 로그인 토큰 유효 일수(1~3650, 그 밖의 값은 기본값) |
+
+가상 주문 스크립트(`backend/scripts/shop_traffic.py`)는 `required`에서 `admin` 토큰 + `buyer_id` 또는 회원 로그인으로 바꿔야 한다.
+
 ## 4. 의존
 `ax-contracts`, `ax-agent-template`. 다른 부서 폴더를 import하지 않는다.
 ## 4-1. 보유기간 삭제 (retention)

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from ax_shop_api.db import Db
@@ -52,11 +53,13 @@ class Storefront:
         names = [name for name in fields if name in allowed]
         if not names:
             raise ShopError("INVALID_PROFILE", "바꿀 칸이 없다", 422)
-        sets = ", ".join(f"{name} = ?" for name in names)  # 열 이름은 위 고정 목록에서만 온다
+        # 열 이름은 위 고정 목록에서만 온다. 바꾼 시각(`updated_at`)도 같이 적는다
+        sets = ", ".join([f"{name} = ?" for name in names] + ["updated_at = ?"])
+        now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         with self.db.tx() as conn:
             changed = conn.execute(
                 f"UPDATE buyers SET {sets} WHERE buyer_id = ?",  # noqa: S608
-                [fields[name] for name in names] + [buyer_id],
+                [fields[name] for name in names] + [now, buyer_id],
             ).rowcount
         if not changed:
             raise ShopError("BUYER_NOT_FOUND", "구매자를 찾을 수 없다", 404)
