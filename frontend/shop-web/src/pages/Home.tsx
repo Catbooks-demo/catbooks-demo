@@ -49,16 +49,16 @@ export default function Home() {
           </svg>
         </div>
         <aside className="rounded-2xl border border-ink-100 bg-surface p-5">
-          <h2 className="text-sm font-bold">{user ? `${user.id} 구매자로 보는 중` : "처음 오셨나요?"}</h2>
+          <h2 className="text-sm font-bold">{user ? `${user.buyer_id} 구매자로 보는 중` : "처음 오셨나요?"}</h2>
           <p className="mt-1 text-xs text-ink-500">
-            {user ? "주문 상세에서 취소·반품·교환·지연 보상을 바로 신청할 수 있어요." : "구매자(데모)를 고르면 주문과 환불 신청을 체험해 볼 수 있어요."}
+            {user ? "주문 상세에서 취소·반품·교환·지연 보상을 바로 신청할 수 있어요." : "가입하고 로그인하면 주문과 환불 신청을 해 볼 수 있어요."}
           </p>
           <ul className="mt-4 space-y-3 text-sm">
             <li className="flex gap-3"><span className="text-brand-600"><IconReceipt /></span><span><b>영수증 기준 자동 계산</b><br /><span className="text-xs text-ink-500">수량·금액·적립금을 영수증과 대조해 환불액을 정해요</span></span></li>
             <li className="flex gap-3"><span className="text-brand-600"><IconRefresh /></span><span><b>고객지원이 환불액을 계산</b><br /><span className="text-xs text-ink-500">신청하면 고객지원이 주문 사실로 금액을 정해요 (신청 전 미리보기는 준비 중)</span></span></li>
             <li className="flex gap-3"><span className="text-brand-600"><IconBox /></span><span><b>반품 입고 순서대로 처리</b><br /><span className="text-xs text-ink-500">검수가 끝난 순서대로 환불·보상이 지급돼요</span></span></li>
           </ul>
-          <Link href={user ? "/orders" : "/login"} className="btn-primary mt-4 w-full">{user ? "내 주문 보기" : "구매자 선택"}</Link>
+          <Link href={user ? "/orders" : "/login"} className="btn-primary mt-4 w-full">{user ? "내 주문 보기" : "로그인"}</Link>
         </aside>
       </section>
 

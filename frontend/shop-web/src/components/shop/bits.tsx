@@ -75,7 +75,7 @@ export function RequireLogin({ children, user, ready }: { children: ReactNode; u
   if (!user) {
     return (
       <Empty>
-        구매자를 먼저 선택해 주세요. <Link href="/login" className="font-semibold text-brand-600 underline">구매자 선택</Link>
+        로그인이 필요해요. <Link href="/login" className="font-semibold text-brand-600 underline">로그인하기</Link>
       </Empty>
     );
   }

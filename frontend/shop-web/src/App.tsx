@@ -8,6 +8,7 @@ import Cart from '@/pages/Cart'
 import Checkout from '@/pages/Checkout'
 import Home from '@/pages/Home'
 import Legal from '@/pages/Legal'
+import DevBuyers from '@/pages/DevBuyers'
 import Login from '@/pages/Login'
 import OrderDetail from '@/pages/OrderDetail'
 import Orders from '@/pages/Orders'
@@ -15,6 +16,7 @@ import PaymentFail from '@/pages/PaymentFail'
 import PaymentSuccess from '@/pages/PaymentSuccess'
 import ProductDetail from '@/pages/ProductDetail'
 import Products from '@/pages/Products'
+import Signup from '@/pages/Signup'
 import Support from '@/pages/Support'
 
 export function App() {
@@ -30,6 +32,8 @@ export function App() {
               <Route path="/cart" element={<Cart />} />
               <Route path="/checkout" element={<Checkout />} />
               <Route path="/login" element={<Login />} />
+              <Route path="/signup" element={<Signup />} />
+              <Route path="/dev/buyers" element={<DevBuyers />} />
               <Route path="/ax-orders" element={<Navigate to="/orders" replace />} />
               <Route path="/orders" element={<Orders />} />
               <Route path="/orders/:id" element={<OrderDetail />} />

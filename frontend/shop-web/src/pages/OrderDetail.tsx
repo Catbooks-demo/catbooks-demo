@@ -32,7 +32,7 @@ function Detail() {
   const inflight = useRef(false); // 결제 요청 중 플래그: state 반영 전의 연속 클릭도 막는다
   const router = useRouter();
   const path = usePayPath();
-  const { claims, failed: claimsFailed, reload: reloadClaims } = useMyClaims(user?.id, id);
+  const { claims, failed: claimsFailed, reload: reloadClaims } = useMyClaims(user?.buyer_id, id);
 
   const load = useCallback(async () => {
     try { setO(await api.order(id)); setError(null); } catch (e) { setError((e as Error).message); }
@@ -87,7 +87,7 @@ function Detail() {
   }
 
   // 남의 주문은 보여 주지 않는다(shop-api는 주문 조회에서 구매자를 대조하지 않으므로 화면에서도 막는다).
-  const mine = !o || !user || o.buyer_id === user.id;
+  const mine = !o || !user || o.buyer_id === user.buyer_id;
   const payable = o && (o.status === "pending_payment" || o.status === "payment_failed");
   const failed = o && o.status === "payment_failed" ? lastFailedPayment(o) : null;
   const guide = o && o.status === "payment_failed" ? failureGuide(failed?.failure_code) : null;

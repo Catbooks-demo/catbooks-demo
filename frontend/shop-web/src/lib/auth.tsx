@@ -1,48 +1,51 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { api, storeBuyer, storedBuyer } from "./api";
-
-/** 구매자 한 명(가명 ID). `name`은 shop-api가 주는 표시용 데모 이름이고, 아직 못 받았으면 null이다. 적립금은 shop-api에 없다. */
-export interface Buyer { id: string; name: string | null }
+import { api, storeToken, storedToken } from "./api";
+import type { Me, SignupInput } from "./types";
 
 interface AuthValue {
-  user: Buyer | null;
+  user: Me | null;
   ready: boolean;
-  login: (id: string) => Promise<void>;
-  logout: () => void;
+  login: (email: string, password: string) => Promise<void>;
+  signup: (input: SignupInput) => Promise<void>;
+  logout: () => Promise<void>;
+  /** 시험용: `SHOP_DEMO_LOGIN=on`인 서버에서 옛 데모 구매자로 로그인한다. */
+  demoLogin: (buyerId: string) => Promise<void>;
+  refresh: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthValue | null>(null);
 
-/** 데모 구매자 선택. 비밀번호·토큰이 없어 ID만 sessionStorage에 두고 주문 요청 본문에 실어 보낸다. */
+/** 로그인 토큰(localStorage)이 있으면 `GET /api/shop/me`로 본인을 다시 받는다. 무효한 토큰은 api.ts가 지운다. */
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<Buyer | null>(() => {
-    const id = storedBuyer();
-    return id ? { id, name: null } : null;
-  });
+  const [user, setUser] = useState<Me | null>(null);
+  const [ready, setReady] = useState(() => !storedToken());
 
-  // 새로고침 뒤에는 저장된 ID로 이름을 다시 받는다. 서버에 없는 구매자면 선택을 푼다.
-  useEffect(() => {
-    const id = storedBuyer();
-    if (!id) return;
-    api.demoUser(id)
-      .then((u) => setUser({ id: u.buyer_id, name: u.display_name }))
-      .catch((e) => {
-        if ((e as { status?: number }).status === 404) { storeBuyer(null); setUser(null); }
-      });
+  const refresh = useCallback(async () => {
+    if (!storedToken()) { setUser(null); return; }
+    try {
+      setUser(await api.me());
+    } catch (e) {
+      const status = (e as { status?: number }).status;
+      if (status === 401) { storeToken(null); setUser(null); }
+    }
   }, []);
 
-  /** 서버에 구매자를 확인(`POST /api/shop/sessions`)한 뒤에만 선택으로 인정한다. 실패하면 던진다. */
-  const login = useCallback(async (id: string) => {
-    const { user: u } = await api.selectUser(id);
-    storeBuyer(u.buyer_id);
-    setUser({ id: u.buyer_id, name: u.display_name });
+  useEffect(() => { void refresh().finally(() => setReady(true)); }, [refresh]);
+
+  const accept = useCallback((r: { token: string; user: Me }) => {
+    storeToken(r.token);
+    setUser(r.user);
   }, []);
-  const logout = useCallback(() => {
-    storeBuyer(null);
+  const login = useCallback(async (email: string, password: string) => accept(await api.login(email, password)), [accept]);
+  const signup = useCallback(async (input: SignupInput) => accept(await api.signup(input)), [accept]);
+  const demoLogin = useCallback(async (buyerId: string) => accept(await api.demoLogin(buyerId)), [accept]);
+  const logout = useCallback(async () => {
+    try { await api.logout(); } catch { /* 서버에 닿지 않아도 이 기기에서는 로그아웃한다 */ }
+    storeToken(null);
     setUser(null);
   }, []);
 
-  const value = useMemo(() => ({ user, ready: true, login, logout }), [user, login, logout]);
+  const value = useMemo(() => ({ user, ready, login, signup, logout, demoLogin, refresh }), [user, ready, login, signup, logout, demoLogin, refresh]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

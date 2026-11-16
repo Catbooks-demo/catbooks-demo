@@ -34,7 +34,7 @@ export default function CheckoutPage() {
     setBusy(true);
     setError(null);
     try {
-      const order = await api.placeOrder({ buyer_id: user.id, items: cart.lines.map((l) => ({ product_id: l.id, qty: l.qty })) });
+      const order = await api.placeOrder({ buyer_id: user.buyer_id, items: cart.lines.map((l) => ({ product_id: l.id, qty: l.qty })) });
       cart.clear();
       // 결제가 실패해도 주문은 만들어졌다: 주문 상세에서 상태를 보고 다시 결제한다.
       await api.pay(order.order_id, method).catch(() => undefined);
@@ -56,7 +56,7 @@ export default function CheckoutPage() {
     setError(null);
     let order: Order | null = null;
     try {
-      order = await api.placeOrder({ buyer_id: user.id, items: cart.lines.map((l) => ({ product_id: l.id, qty: l.qty })) });
+      order = await api.placeOrder({ buyer_id: user.buyer_id, items: cart.lines.map((l) => ({ product_id: l.id, qty: l.qty })) });
       const prepared = await api.tossPrepare(order.order_id);
       await widget.pay(prepared, () => {
         setFrozen(cart.lines);
@@ -98,8 +98,8 @@ export default function CheckoutPage() {
           <div className="space-y-6">
             <section className="rounded-xl border border-ink-100 bg-surface p-5">
               <h2 className="mb-3 text-sm font-bold">구매자</h2>
-              <p className="text-sm font-medium">{user?.name ?? user?.id}</p>
-              {user?.name && <p className="font-mono text-xs text-ink-500">{user.id}</p>}
+              <p className="text-sm font-medium">{user?.display_name ?? user?.buyer_id}</p>
+              {user?.display_name && <p className="font-mono text-xs text-ink-500">{user.buyer_id}</p>}
               {/* TODO(ax-backend#385): 받는 분·주소 입력은 shop-api 주문에 해당 필드가 생기면 추가한다 */}
             </section>
             <section className="rounded-xl border border-ink-100 bg-surface p-5">

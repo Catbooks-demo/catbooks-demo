@@ -14,7 +14,7 @@ export default function OrdersPage() {
   const [orders, setOrders] = useState<Order[] | null>(null);
   const [target, setTarget] = useState<Order | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const buyer = user?.id;
+  const buyer = user?.buyer_id;
   const { claims, failed: claimsFailed, reload: reloadClaims } = useMyClaims(buyer);
 
   useEffect(() => {
