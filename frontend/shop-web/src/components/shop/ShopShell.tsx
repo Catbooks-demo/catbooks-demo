@@ -124,6 +124,7 @@ export function ShopShell({ children }: { children: ReactNode }) {
           <div>
             <p className="font-semibold text-ink-700">데모 안내</p>
             <p className="mt-1 leading-relaxed">상품은 모두 가상 데이터입니다. 취소·반품·교환 신청은 고객지원이 판정합니다.</p>
+            <p className="mt-1 text-[11px] text-ink-400">도서 정보 출처: 도서관 정보나루</p>
           </div>
         </div>
         <nav aria-label="약관" className="mx-auto flex max-w-6xl gap-4 px-4 pb-6">

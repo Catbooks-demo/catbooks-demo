@@ -21,3 +21,6 @@ dist/
 # 편집기
 .vscode/
 .idea/
+
+# 도서관 정보나루 응답 캐시 (backend/scripts/seed_books.py, 키는 담지 않는다)
+backend/.cache/

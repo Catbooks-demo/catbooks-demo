@@ -1,0 +1,365 @@
+{
+ "note": "문구 상품은 공개 자료가 없어 만든 일반 이름의 데모 상품이다(상표·브랜드 없음). 가격·재고는 데모 값이다.",
+ "items": [
+  {
+   "name": "0.5mm 중성펜 검정 10자루",
+   "genre_code": "writing",
+   "category_code": "stationery",
+   "price": 6500,
+   "stock": 230,
+   "description": "부드럽게 써지는 0.5mm 중성 잉크 펜. 필기·서명용 기본 검정 10자루 묶음."
+  },
+  {
+   "name": "0.38mm 젤펜 파스텔 8색 세트",
+   "genre_code": "writing",
+   "category_code": "stationery",
+   "price": 9800,
+   "stock": 262,
+   "description": "가는 0.38mm 젤 잉크 펜 8색. 다이어리 필기와 밑줄 긋기에 좋다."
+  },
+  {
+   "name": "노크식 볼펜 3색 1자루",
+   "genre_code": "writing",
+   "category_code": "stationery",
+   "price": 2500,
+   "stock": 160,
+   "description": "검정·빨강·파랑 세 가지 심을 노크로 바꿔 쓰는 다색 볼펜."
+  },
+  {
+   "name": "수성 형광펜 6색 세트",
+   "genre_code": "writing",
+   "category_code": "stationery",
+   "price": 5900,
+   "stock": 122,
+   "description": "번짐이 적은 수성 형광펜 6색. 양쪽 촉(굵은 촉·가는 촉)."
+  },
+  {
+   "name": "0.5mm 샤프펜슬 금속 그립",
+   "genre_code": "writing",
+   "category_code": "stationery",
+   "price": 8500,
+   "stock": 372,
+   "description": "미끄럼을 줄인 금속 그립 샤프. 0.5mm 심 사용."
+  },
+  {
+   "name": "샤프심 0.5mm HB 40개입 3통",
+   "genre_code": "writing",
+   "category_code": "stationery",
+   "price": 3600,
+   "stock": 233,
+   "description": "부러짐이 적은 0.5mm HB 샤프심 3통 묶음."
+  },
+  {
+   "name": "원목 연필 HB 12자루",
+   "genre_code": "writing",
+   "category_code": "stationery",
+   "price": 5400,
+   "stock": 356,
+   "description": "향나무 원목 육각 연필 12자루. 지우개 없음."
+  },
+  {
+   "name": "4B 스케치 연필 세트 6자루",
+   "genre_code": "writing",
+   "category_code": "stationery",
+   "price": 7200,
+   "stock": 347,
+   "description": "2B부터 8B까지 진하기가 다른 스케치용 연필 6자루."
+  },
+  {
+   "name": "입문용 만년필 EF촉",
+   "genre_code": "writing",
+   "category_code": "stationery",
+   "price": 18000,
+   "stock": 81,
+   "description": "카트리지·컨버터 겸용 입문 만년필. 아주 가는 EF촉."
+  },
+  {
+   "name": "만년필 카트리지 잉크 블루블랙 6개",
+   "genre_code": "writing",
+   "category_code": "stationery",
+   "price": 4500,
+   "stock": 184,
+   "description": "표준 규격 만년필용 카트리지 잉크 6개."
+  },
+  {
+   "name": "붓펜 중간 굵기 2자루",
+   "genre_code": "writing",
+   "category_code": "stationery",
+   "price": 6800,
+   "stock": 236,
+   "description": "캘리그래피·손글씨용 붓펜. 검정 잉크 2자루."
+  },
+  {
+   "name": "수성 사인펜 24색",
+   "genre_code": "writing",
+   "category_code": "stationery",
+   "price": 8900,
+   "stock": 117,
+   "description": "선명한 수성 사인펜 24색. 그림 그리기와 필기 겸용."
+  },
+  {
+   "name": "지워지는 볼펜 0.5mm 5색",
+   "genre_code": "writing",
+   "category_code": "stationery",
+   "price": 9500,
+   "stock": 322,
+   "description": "마찰열로 지워지는 잉크를 쓴 0.5mm 볼펜 5색."
+  },
+  {
+   "name": "미니 지우개 10개 세트",
+   "genre_code": "writing",
+   "category_code": "stationery",
+   "price": 3000,
+   "stock": 364,
+   "description": "가루가 잘 뭉치는 플라스틱 지우개 10개."
+  },
+  {
+   "name": "필통 지퍼형 2단",
+   "genre_code": "writing",
+   "category_code": "stationery",
+   "price": 12000,
+   "stock": 372,
+   "description": "펜 20자루가 들어가는 2단 지퍼 필통. 생활 방수 원단."
+  },
+  {
+   "name": "A5 무선 노트 줄지 80매 3권",
+   "genre_code": "notebook",
+   "category_code": "stationery",
+   "price": 7500,
+   "stock": 388,
+   "description": "제본이 펼쳐지는 A5 무선 노트. 7mm 줄지 80매 3권."
+  },
+  {
+   "name": "B5 스프링 노트 모눈 100매",
+   "genre_code": "notebook",
+   "category_code": "stationery",
+   "price": 4800,
+   "stock": 151,
+   "description": "5mm 모눈 B5 스프링 노트. 그래프·도식 정리에 좋다."
+  },
+  {
+   "name": "A5 도트 노트 하드커버 192쪽",
+   "genre_code": "notebook",
+   "category_code": "stationery",
+   "price": 13500,
+   "stock": 162,
+   "description": "5mm 도트 내지 하드커버 노트. 책갈피 끈 포함."
+  },
+  {
+   "name": "만년 다이어리 A5 하드커버",
+   "genre_code": "notebook",
+   "category_code": "stationery",
+   "price": 16800,
+   "stock": 51,
+   "description": "날짜를 직접 쓰는 만년형 다이어리. 월간·주간 구성."
+  },
+  {
+   "name": "포켓 수첩 A6 무지 3권",
+   "genre_code": "notebook",
+   "category_code": "stationery",
+   "price": 6000,
+   "stock": 57,
+   "description": "주머니에 들어가는 A6 무지 수첩 3권 세트."
+  },
+  {
+   "name": "크라프트 표지 노트 B5 5권",
+   "genre_code": "notebook",
+   "category_code": "stationery",
+   "price": 8500,
+   "stock": 315,
+   "description": "크라프트지 표지의 B5 줄 노트 5권 묶음."
+  },
+  {
+   "name": "코넬식 노트 A4 70매",
+   "genre_code": "notebook",
+   "category_code": "stationery",
+   "price": 5500,
+   "stock": 80,
+   "description": "요점·필기·요약 칸이 나뉜 코넬식 A4 노트."
+  },
+  {
+   "name": "드로잉북 A4 160g 30매",
+   "genre_code": "notebook",
+   "category_code": "stationery",
+   "price": 9800,
+   "stock": 229,
+   "description": "연필·색연필용 160g 중성지 드로잉북."
+  },
+  {
+   "name": "필사 노트 원고지형 A5",
+   "genre_code": "notebook",
+   "category_code": "stationery",
+   "price": 7000,
+   "stock": 273,
+   "description": "책 필사용 원고지 칸 노트. 200자 쪽 60매."
+  },
+  {
+   "name": "독서 기록장 A5",
+   "genre_code": "notebook",
+   "category_code": "stationery",
+   "price": 11000,
+   "stock": 187,
+   "description": "읽은 책·문장·생각을 적는 칸이 있는 독서 기록 노트."
+  },
+  {
+   "name": "주간 플래너 6개월 날짜 없음",
+   "genre_code": "notebook",
+   "category_code": "stationery",
+   "price": 12500,
+   "stock": 316,
+   "description": "날짜를 쓰는 6개월 주간 플래너. 할 일 칸 포함."
+  },
+  {
+   "name": "메모패드 떡메모지 100매 4종",
+   "genre_code": "notebook",
+   "category_code": "stationery",
+   "price": 6400,
+   "stock": 181,
+   "description": "한 장씩 뜯어 쓰는 떡메모지 4가지 무늬."
+  },
+  {
+   "name": "접착 메모지 76x76 12패드",
+   "genre_code": "notebook",
+   "category_code": "stationery",
+   "price": 7800,
+   "stock": 287,
+   "description": "다시 붙일 수 있는 정사각 접착 메모지 12패드."
+  },
+  {
+   "name": "바인더 노트 A5 6공 리필 100매",
+   "genre_code": "notebook",
+   "category_code": "stationery",
+   "price": 5200,
+   "stock": 63,
+   "description": "6공 바인더용 A5 줄지 리필 내지 100매."
+  },
+  {
+   "name": "가죽 느낌 커버 바인더 A5 6공",
+   "genre_code": "notebook",
+   "category_code": "stationery",
+   "price": 19800,
+   "stock": 283,
+   "description": "합성 가죽 커버의 A5 6공 바인더. 펜 꽂이 포함."
+  },
+  {
+   "name": "마스킹테이프 15mm 10롤 세트",
+   "genre_code": "deco",
+   "category_code": "stationery",
+   "price": 9000,
+   "stock": 212,
+   "description": "손으로 찢어지는 15mm 마스킹테이프 10가지 무늬."
+  },
+  {
+   "name": "마스킹테이프 와이드 30mm 3롤",
+   "genre_code": "deco",
+   "category_code": "stationery",
+   "price": 7500,
+   "stock": 397,
+   "description": "꾸미기 배경으로 쓰는 30mm 넓은 마스킹테이프."
+  },
+  {
+   "name": "투명 씰 스티커 꽃 모음 40매",
+   "genre_code": "deco",
+   "category_code": "stationery",
+   "price": 4500,
+   "stock": 83,
+   "description": "투명 바탕의 꽃 그림 씰 스티커 40매."
+  },
+  {
+   "name": "레트로 라벨 스티커 6장",
+   "genre_code": "deco",
+   "category_code": "stationery",
+   "price": 5000,
+   "stock": 96,
+   "description": "날짜·제목 칸이 있는 레트로 라벨 스티커 6장."
+  },
+  {
+   "name": "알파벳 레터링 스티커 4장",
+   "genre_code": "deco",
+   "category_code": "stationery",
+   "price": 4000,
+   "stock": 187,
+   "description": "대문자·소문자·숫자 레터링 스티커."
+  },
+  {
+   "name": "고양이 일러스트 스티커 팩 50매",
+   "genre_code": "deco",
+   "category_code": "stationery",
+   "price": 6000,
+   "stock": 366,
+   "description": "다양한 표정의 고양이 그림 스티커 50매."
+  },
+  {
+   "name": "다꾸용 클리어 스탬프 세트",
+   "genre_code": "deco",
+   "category_code": "stationery",
+   "price": 12000,
+   "stock": 154,
+   "description": "투명 아크릴 블록과 함께 쓰는 클리어 스탬프 20개."
+  },
+  {
+   "name": "스탬프 잉크패드 파스텔 6색",
+   "genre_code": "deco",
+   "category_code": "stationery",
+   "price": 9800,
+   "stock": 266,
+   "description": "종이에 빨리 마르는 수성 잉크패드 6색."
+  },
+  {
+   "name": "데코 펀치 원형 25mm",
+   "genre_code": "deco",
+   "category_code": "stationery",
+   "price": 8500,
+   "stock": 183,
+   "description": "종이를 동그랗게 뚫는 25mm 원형 펀치."
+  },
+  {
+   "name": "모양 가위 6종 세트",
+   "genre_code": "deco",
+   "category_code": "stationery",
+   "price": 11000,
+   "stock": 242,
+   "description": "물결·지그재그 등 테두리 모양이 다른 가위 6개."
+  },
+  {
+   "name": "트래블 티켓 콜라주 페이퍼 30매",
+   "genre_code": "deco",
+   "category_code": "stationery",
+   "price": 6500,
+   "stock": 306,
+   "description": "여행 기록 꾸미기용 티켓·영수증 무늬 종이."
+  },
+  {
+   "name": "미니 사진 프레임 스티커 20매",
+   "genre_code": "deco",
+   "category_code": "stationery",
+   "price": 4800,
+   "stock": 336,
+   "description": "작은 사진을 끼우는 프레임 모양 스티커."
+  },
+  {
+   "name": "반짝이 데코 젤펜 6색",
+   "genre_code": "deco",
+   "category_code": "stationery",
+   "price": 7900,
+   "stock": 69,
+   "description": "펄이 들어간 꾸미기용 젤펜 6색."
+  },
+  {
+   "name": "양면 테이프 롤러 리필 포함",
+   "genre_code": "deco",
+   "category_code": "stationery",
+   "price": 6900,
+   "stock": 205,
+   "description": "종이 붙이기용 테이프 롤러와 리필 1개."
+  },
+  {
+   "name": "다꾸 보관 파우치 투명창",
+   "genre_code": "deco",
+   "category_code": "stationery",
+   "price": 13800,
+   "stock": 221,
+   "description": "스티커·테이프를 나눠 담는 투명창 파우치."
+  }
+ ]
+}
