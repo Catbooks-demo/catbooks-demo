@@ -362,6 +362,9 @@ REFUND_ALLOWED = {"support"}
 INQUIRY_READERS = {"support", "admin"}
 # 데이터 조회(읽기 전용)는 분석을 하는 data와 관리자만
 DATA_READERS = {"data", "admin"}
+# 판매 집계(읽기 전용)는 data·관리자에 더해 AXcellent 고객지원(`support`)도 읽는다
+# (책별 클레임 비율의 분모)
+SALES_READERS = {"support", "data", "admin"}
 # 총괄 사건 읽기 중계는 관리자와 읽기 전용 열람자(`viewer`)만.
 # 사람 로그인(소유자·공동소유자·분야 관리자)은 사람 인증 뒤에 붙인다
 ORCHESTRATOR_VIEWERS = {"admin", "viewer"}
@@ -1325,6 +1328,18 @@ def create_app(
         query = _query(ShopFailedOrdersQuery, from_=from_, to=to, category=category, limit=limit)
         result = lookups.failed_orders(query, status=status)
         return _ok(result.model_dump(mode="json"))
+
+    @app.get("/api/shop/sales-summary")
+    def sales_summary(
+        from_: Annotated[datetime, Query(alias="from")],
+        to: datetime,
+        group_by: Annotated[str, Query(max_length=64)] = "product",
+        _: str = Depends(_caller(SALES_READERS)),
+    ) -> dict:
+        """결제가 끝난 주문의 판매 수량을 `group_by`(`product`·`age_band`·`category`)별로 합친다."""
+        if from_.tzinfo is None or to.tzinfo is None:
+            raise ShopError("INVALID_QUERY", "from·to에는 시간대가 필요하다")
+        return _ok(lookups.sales_summary(from_, to, group_by))
 
     @app.get("/api/shop/metric-series")
     def metric_series(

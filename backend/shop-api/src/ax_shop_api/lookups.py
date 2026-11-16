@@ -49,6 +49,15 @@ from ax_shop_api.service import ShopError
 BUCKET = timedelta(minutes=5)
 LISTING_WINDOW = timedelta(hours=24)  # 판매자 정보의 "최근 등록" 구간
 MAX_ATTRIBUTION_DAYS = 31  # 유입 출처 주문 조회의 기간 상한
+# 판매 집계(`sales_summary`)로 묶을 수 있는 기준. 정한 값만 받고 다른 값은 422다
+SALES_GROUPS = ("product", "age_band", "category")
+# 판매 집계의 기간 상한. 넓은 기간은 주문·품목을 통째로 합쳐 서버(연결 하나)를 붙잡는다
+MAX_SALES_SUMMARY_DAYS = 93
+# 전액 환불된 주문: 환불 합계가 주문 금액 이상이다 (`attributed_orders`·쿠폰 귀속 집계와 같은 기준)
+_FULLY_REFUNDED = (
+    "o.total_amount > 0 AND COALESCE((SELECT SUM(r.amount) FROM refunds r "
+    "WHERE r.order_id = o.order_id), 0) >= o.total_amount"
+)
 MAX_POINTS = 2016  # 5분 버킷 7일치. 넘으면 잘라서 `truncated`로 알린다
 # 지표 시계열 한 번의 기간 상한. 넓은 기간은 결제·주문을 통째로 읽어 서버를 붙잡는다(2026-11-10).
 # 더 긴 기간은 부르는 쪽이 하루씩 나눠 부른다(data 커넥터 SERIES_CHUNK = 1일)
@@ -69,6 +78,19 @@ ORDER_VALUE_FILTER = {
     "coupon_discount_amount": _COUPON_KEPT,
 }
 ORDER_VALUE_METRICS = frozenset(ORDER_VALUE_FILTER)
+
+
+def _parse_group_by(text: str) -> tuple[str, ...]:
+    """`product,age_band`처럼 쉼표로 이은 기준을 확인한다. 정한 값이 아니거나 비면 422다."""
+    groups = tuple(dict.fromkeys(part.strip() for part in text.split(",") if part.strip()))
+    bad = [g for g in groups if g not in SALES_GROUPS]
+    if not groups or bad:
+        raise ShopError(
+            "INVALID_GROUP_BY",
+            f"group_by는 {', '.join(SALES_GROUPS)} 중에서 쉼표로 이어 고른다",
+            422,
+        )
+    return groups
 
 
 def _iso(moment: datetime) -> str:
@@ -224,6 +246,61 @@ class Lookups:
             "order_count": len(orders),
             "total_amount": sum(o["total_amount"] for o in orders),
             "truncated": truncated,
+        }
+
+    def sales_summary(
+        self, since: datetime, until: datetime, group_by: str = "product"
+    ) -> dict[str, Any]:
+        """결제가 끝난 주문의 판매 수량을 기준별로 합친다.
+
+        접수 시각이 `since` 이상 `until` 미만인 주문이다.
+
+        `group_by`는 쉼표로 이은 `product`·`age_band`·`category`(정한 값만, 다른 값은 422).
+        한 줄은 기준 값의 조합 하나이고 두 판매 수량을 같이 준다.
+        - `gross_qty`: 결제가 끝난 주문의 판매 수량 (클레임 비율의 분모처럼 환불된 주문도 센다)
+        - `net_qty`: 그중 전액 환불된 주문을 뺀 수량 (`attributed_orders`와 같은 기준.
+          취소된 주문은 결제가 끝난 적이 없어 처음부터 빠진다)
+        `age_band`가 null인 줄은 연령대를 모르는 구매자다 (채워 넣지 않는다). 구매자 ID·이름·
+        결제 수단 같은 개인 식별값은 돌려주지 않는다. 기간은 `MAX_SALES_SUMMARY_DAYS`일까지다.
+        """
+        groups = _parse_group_by(group_by)
+        if until <= since:
+            raise ShopError("INVALID_RANGE", "to는 from보다 뒤여야 한다")
+        if until - since > timedelta(days=MAX_SALES_SUMMARY_DAYS):
+            raise ShopError(
+                "RANGE_TOO_LONG", f"기간은 {MAX_SALES_SUMMARY_DAYS}일을 넘을 수 없다", 400
+            )
+        columns = {
+            "product": ("i.product_id", "product_id"),
+            "age_band": ("b.age_band", "age_band"),
+            "category": ("pr.category_code", "category_code"),
+        }
+        select = ", ".join(f"{columns[g][0]} AS {columns[g][1]}" for g in groups)
+        by = ", ".join(columns[g][0] for g in groups)  # 별칭이 아니라 열로 묶는다(상품 표와 겹침)
+        joins = ""
+        if "age_band" in groups:
+            joins += " LEFT JOIN buyers b ON b.buyer_id = k.buyer_id"
+        if "category" in groups:
+            joins += " LEFT JOIN products pr ON pr.product_id = i.product_id"
+        sql = (  # noqa: S608 - 열 이름은 위 고정 표에서만 온다 (고객 입력이 아니다)
+            "WITH k AS (SELECT o.order_id, o.buyer_id, "
+            f"CASE WHEN {_FULLY_REFUNDED} THEN 1 ELSE 0 END AS refunded_all "
+            "FROM orders o WHERE o.tenant_id = ? AND o.status = 'paid' "
+            "AND o.created_at >= ? AND o.created_at < ?) "
+            f"SELECT {select}, COUNT(DISTINCT k.order_id) AS order_count, "
+            "SUM(i.qty) AS gross_qty, "
+            "SUM(CASE WHEN k.refunded_all = 0 THEN i.qty ELSE 0 END) AS net_qty "
+            f"FROM k JOIN order_items i ON i.order_id = k.order_id{joins} "
+            f"GROUP BY {by} ORDER BY {by}"
+        )
+        with self.db.tx() as conn:
+            rows = conn.execute(sql, [TENANT_ID, _iso(since), _iso(until)]).fetchall()
+        return {
+            "from": _iso(since),
+            "to": _iso(until),
+            "group_by": list(groups),
+            "rows": [dict(r) for r in rows],
+            "collected_at": _iso(self.now()),
         }
 
     def metric_series(self, query: ShopMetricSeriesQuery) -> ShopMetricSeriesResult:
