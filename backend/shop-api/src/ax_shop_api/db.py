@@ -155,6 +155,9 @@ _ADDED_COLUMNS = {
         ("age_band", "TEXT"),
         # 구매자 성별 코드(`female`·`male`·`no_answer`). 비어 있으면 모르는 것이다. 채워 넣지 않는다
         ("gender", "TEXT"),
+        # 구매자 직업군 코드(`student`·`employee`·`self_employed`·`other`·`no_answer`). 큰 구분만
+        # 선택으로 받는다. 비어 있으면 모르는 것이다. 채워 넣지 않는다
+        ("occupation", "TEXT"),
     ),
     # 책 정보(선택). 외부 도서 자료와 ISBN으로 정확히 잇는 데 쓴다. 비어 있으면 모르는 것이다
     "products": (("isbn13", "TEXT"), ("author", "TEXT"), ("publisher", "TEXT")),

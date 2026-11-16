@@ -20,6 +20,7 @@ SUPPORT = {"Authorization": "Bearer mock:support"}
 def _mock_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AGENT_TEMPLATE_MOCK", "1")
     monkeypatch.setenv("SHOP_MONITOR_INTERVAL_S", "0")
+    monkeypatch.setattr("ax_shop_api.lookups.MIN_GROUP_BUYERS", 1)  # 숨기기는 별도 파일에서 본다
     events.reset_mock_bus()
 
 
@@ -55,7 +56,7 @@ def test_clear_with_null_and_reject_anything_else(client: TestClient) -> None:
     client.patch("/api/shop/users/buy_0003", json={"gender": "male"})
     cleared = client.patch("/api/shop/users/buy_0003", json={"gender": None})
     assert cleared.status_code == 200 and cleared.json()["data"]["gender"] is None
-    for bad in ({"gender": "other"}, {"gender": 1}, {"occupation": "student"}, {}):
+    for bad in ({"gender": "other"}, {"gender": 1}, {"job_title": "student"}, {}):
         assert client.patch("/api/shop/users/buy_0003", json=bad).status_code == 422
     assert _user(client, "buy_0003")["gender"] is None
 

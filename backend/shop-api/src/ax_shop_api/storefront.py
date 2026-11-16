@@ -31,12 +31,13 @@ class Storefront:
         return [self._user(r["buyer_id"]) for r in rows]
 
     def get_user(self, buyer_id: str) -> dict[str, Any]:
-        """한 구매자. `age_band`(연령대 구간)·`gender`(성별 코드)는 목록에는 싣지 않고
-        이 한 명 조회에만 싣는다. 모르면 None이다.
+        """한 구매자. `age_band`(연령대)·`gender`(성별)·`occupation`(직업군)은 목록에는
+        싣지 않고 이 한 명 조회에만 싣는다. 모르면 None이다.
         """
         with self.db.tx() as conn:
             found = conn.execute(
-                "SELECT buyer_id, age_band, gender FROM buyers WHERE buyer_id = ?", (buyer_id,)
+                "SELECT buyer_id, age_band, gender, occupation FROM buyers WHERE buyer_id = ?",
+                (buyer_id,),
             ).fetchone()
         if found is None:
             raise ShopError("BUYER_NOT_FOUND", "구매자를 찾을 수 없다", 404)
@@ -44,11 +45,12 @@ class Storefront:
             **self._user(found["buyer_id"]),
             "age_band": found["age_band"],
             "gender": found["gender"],
+            "occupation": found["occupation"],
         }
 
     def set_profile(self, buyer_id: str, fields: dict[str, str | None]) -> dict[str, Any]:
-        """구매자 프로필 칸(`age_band`·`gender`) 중 `fields`에 든 것만 바꾼다(None이면 지운다)."""
-        allowed = ("age_band", "gender")
+        """프로필 칸(`age_band`·`gender`·`occupation`) 중 `fields`에 든 것만 바꾼다."""
+        allowed = ("age_band", "gender", "occupation")
         names = [name for name in fields if name in allowed]
         if not names:
             raise ShopError("INVALID_PROFILE", "바꿀 칸이 없다", 422)

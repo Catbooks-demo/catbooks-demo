@@ -27,6 +27,8 @@ def _iso(moment: datetime) -> str:
 def _mock_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AGENT_TEMPLATE_MOCK", "1")
     monkeypatch.setenv("SHOP_MONITOR_INTERVAL_S", "0")
+    # 이 파일은 집계 값 자체를 본다 — 작은 묶음 숨기기는 test_sales_summary_suppression.py에서 본다
+    monkeypatch.setattr("ax_shop_api.lookups.MIN_GROUP_BUYERS", 1)
     events.reset_mock_bus()
 
 
@@ -205,6 +207,14 @@ def test_only_data_support_and_admin_may_read(client: TestClient) -> None:
 def test_the_response_has_no_personal_identifiers(client: TestClient, db: Db) -> None:
     _order(client, db, _products(client)["book"], 1)
     data = _get(client, group_by="product,age_band,category")
-    allowed = {"product_id", "age_band", "category_code", "order_count", "gross_qty", "net_qty"}
+    allowed = {
+        "product_id",
+        "age_band",
+        "category_code",
+        "order_count",
+        "gross_qty",
+        "net_qty",
+        "suppressed",
+    }
     assert data["rows"] and all(set(r) <= allowed for r in data["rows"])
     assert set(data) == {"from", "to", "group_by", "rows", "collected_at"}
