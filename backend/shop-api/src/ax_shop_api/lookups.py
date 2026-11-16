@@ -173,7 +173,7 @@ class Lookups:
 
     def customer_export(
         self, cursor: str | None, limit: int
-    ) -> tuple[list[dict[str, Any]], str | None]:
+    ) -> tuple[list[dict[str, Any]], str | None, bool]:
         """고객 내보내기: 가명 ID(`buyer_id`)와 연령대·성별·직업군뿐이다(이름·연락처 없음).
 
         `(change_seq, buyer_id)`(바뀐 순서, 없으면 0) 순으로 `limit`줄씩 준다. 커서는 마지막 줄의
@@ -217,12 +217,12 @@ class Lookups:
             }
             for r in page
         ]
-        next_cursor = None
-        if len(rows) > limit:
+        next_cursor = cursor or None  # 빈 페이지면 받은 커서를 그대로 돌려준다
+        if page:
             last = page[-1]
             raw = f"{last['seq']}|{last['buyer_id']}"
             next_cursor = base64.urlsafe_b64encode(raw.encode()).decode()
-        return data, next_cursor
+        return data, next_cursor, len(rows) > limit
 
     def attributed_orders(
         self,

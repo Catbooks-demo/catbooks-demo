@@ -1709,10 +1709,12 @@ def create_app(
     ) -> dict:
         """가명 ID와 연령대·성별·직업군만 준다(이름·연락처 없음). `data`·`admin` 토큰만.
 
-        프로필을 고친 구매자는 `meta.next_cursor`로 다시 읽을 때 다시 나온다.
+        `meta.next_cursor`는 늘 마지막 줄의 커서(빈 페이지면 받은 커서)이고
+        `meta.has_more`가 참인 동안 이어 읽는다.
+        끝난 뒤 그 커서를 두었다가 다음에 읽으면 그 뒤에 바뀐 구매자만 나온다.
         """
-        data, next_cursor = lookups.customer_export(cursor, limit)
-        return _ok(data, next_cursor=next_cursor)
+        data, next_cursor, has_more = lookups.customer_export(cursor, limit)
+        return _ok(data, next_cursor=next_cursor, has_more=has_more)
 
     @app.get("/api/shop/metric-series")
     def metric_series(

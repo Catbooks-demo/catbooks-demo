@@ -58,45 +58,46 @@ def test_export_has_no_names_or_contacts(client: TestClient) -> None:
     assert EMAIL not in res.text and "고양이" not in res.text
 
 
-def test_export_pages_by_cursor_and_returns_changes(client: TestClient) -> None:
-    token = _signup(client)
-
+def _poll(client: TestClient, cursor: str | None, limit: int) -> tuple[list[dict], str | None]:
+    """has_more인 동안 이어 읽고, (읽은 줄, 다음 읽기에 쓸 커서)를 돌려준다."""
     rows: list[dict] = []
-    cursor: str | None = None
     while True:
-        params: dict[str, object] = {"limit": 10}
+        params: dict[str, object] = {"limit": limit}
         if cursor:
             params["cursor"] = cursor
-        body = client.get("/api/shop/customers/export", params=params, headers=DATA).json()
-        rows += body["data"]
-        cursor = body["meta"]["next_cursor"]
-        if cursor is None:
-            break
-        last_cursor = cursor
-    assert len(rows) == 31 and len({r["buyer_id"] for r in rows}) == 31
+        meta_body = client.get("/api/shop/customers/export", params=params, headers=DATA).json()
+        rows += meta_body["data"]
+        cursor = meta_body["meta"]["next_cursor"]
+        if not meta_body["meta"]["has_more"]:
+            return rows, cursor
 
-    # 방금 읽은 마지막 줄(가입한 회원)과 같은 초에 바뀌어도 읽은 곳 뒤로 나온다
+
+def test_export_pages_by_cursor_and_returns_changes(client: TestClient) -> None:
+    token = _signup(client)
+    rows, saved = _poll(client, None, 10)
+    assert len(rows) == 31 and len({r["buyer_id"] for r in rows}) == 31
+    assert saved
+
+    # 끝난 뒤 저장한 커서로 다시 읽으면 0줄이고 같은 커서가 돌아온다
+    idle = client.get("/api/shop/customers/export", params={"cursor": saved}, headers=DATA).json()
+    assert idle["data"] == [] and idle["meta"] == {"next_cursor": saved, "has_more": False}
+
     patch = client.patch(
         "/api/shop/me",
         json={"occupation": "employee"},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert patch.status_code == 200
-    again = client.get(
-        "/api/shop/customers/export", params={"cursor": last_cursor}, headers=DATA
-    ).json()
-    changed = [r for r in again["data"] if r["occupation"] == "employee"]
-    assert len(changed) == 1 and changed[0]["buyer_id"] == "buy_0031"
+    changed, saved2 = _poll(client, saved, 10)
+    assert [r["buyer_id"] for r in changed] == ["buy_0031"]
+    assert changed[0]["occupation"] == "employee" and saved2 != saved
 
 
 def test_earlier_buyer_changed_after_the_reader_passed_it_reappears(client: TestClient) -> None:
     """읽은 곳보다 buyer_id가 앞선 구매자가 같은 초에 바뀌어도 다음 읽기에 나온다."""
     _signup(client)  # buy_0031
-    edge = client.get("/api/shop/customers/export", params={"limit": 30}, headers=DATA).json()
-    cursor = edge["meta"]["next_cursor"]  # buy_0030까지 읽은 곳
-    assert cursor
-    seen = client.get("/api/shop/customers/export", params={"cursor": cursor}, headers=DATA)
-    assert [r["buyer_id"] for r in seen.json()["data"]] == ["buy_0031"]
+    rows, saved = _poll(client, None, 30)
+    assert len(rows) == 31
 
     res = client.patch(
         "/api/shop/users/buy_0005",
@@ -104,10 +105,8 @@ def test_earlier_buyer_changed_after_the_reader_passed_it_reappears(client: Test
         headers={"Authorization": "Bearer mock:admin"},
     )
     assert res.status_code == 200, res.text
-    after = client.get(
-        "/api/shop/customers/export", params={"cursor": cursor}, headers=DATA
-    ).json()["data"]
-    assert [r["buyer_id"] for r in after] == ["buy_0031", "buy_0005"]
+    after, _ = _poll(client, saved, 30)
+    assert [r["buyer_id"] for r in after] == ["buy_0005"]
 
 
 def test_export_rejects_a_bad_cursor_and_limit(client: TestClient) -> None:
