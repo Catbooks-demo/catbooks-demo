@@ -170,7 +170,13 @@ _ADDED_COLUMNS = {
         ("updated_at", "TEXT"),
     ),
     # 책 정보(선택). 외부 도서 자료와 ISBN으로 정확히 잇는 데 쓴다. 비어 있으면 모르는 것이다
-    "products": (("isbn13", "TEXT"), ("author", "TEXT"), ("publisher", "TEXT")),
+    "products": (
+        ("isbn13", "TEXT"),
+        ("author", "TEXT"),
+        ("publisher", "TEXT"),
+        # 장르 코드(`genres.GENRES`의 코드 하나). 비어 있으면 모르는 것이다. 채워 넣지 않는다
+        ("genre_code", "TEXT"),
+    ),
     "orders": (
         ("shipping_fee", "INTEGER NOT NULL DEFAULT 0"),
         ("points_used", "INTEGER NOT NULL DEFAULT 0"),
