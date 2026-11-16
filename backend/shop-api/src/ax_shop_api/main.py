@@ -37,6 +37,7 @@ from ax_contracts.data_access.shop_metric_series import ShopMetricSeriesQuery
 from ax_contracts.data_access.shop_seller_prices import ShopSellerPricesQuery
 from ax_contracts.data_access.shop_seller_profile import ShopSellerProfileQuery
 from ax_shop_api import (
+    accounts,
     book_info,
     claim_inbox,
     idea_inbox,
@@ -49,6 +50,7 @@ from ax_shop_api import (
     support_client,
     toss,
 )
+from ax_shop_api.accounts import Accounts
 from ax_shop_api.db import Db
 from ax_shop_api.lookups import Lookups
 from ax_shop_api.promotions import Promotions
@@ -168,6 +170,34 @@ class ProfileIn(BaseModel):
         if not self.model_fields_set:
             raise ValueError("age_band·gender 중 하나는 보내야 한다")
         return self
+
+
+class SignupIn(BaseModel):
+    """이메일 가입. 연령대·성별·직업군은 선택이고 코드값만 받는다(안 보내면 모르는 것이다)."""
+
+    model_config = {"extra": "forbid"}
+
+    email: str = Field(max_length=accounts.EMAIL_MAX + 64)
+    password: str = Field(max_length=1024)  # 길이 규칙은 서비스(WEAK_PASSWORD)가 본다
+    display_name: str = Field(max_length=200)
+    agree_terms: Literal[True]
+    agree_privacy: Literal[True]
+    age_band: Literal["10s", "20s", "30s", "40s", "50s_plus"] | None = None
+    gender: Literal["female", "male", "no_answer"] | None = None
+    job_group: Literal["student", "employee", "self_employed", "other", "no_answer"] | None = None
+
+
+class LoginIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    email: str = Field(max_length=1024)
+    password: str = Field(max_length=1024)
+
+
+class DemoLoginIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    buyer_id: str = Field(max_length=32)
 
 
 class ShippedIn(BaseModel):
@@ -548,6 +578,7 @@ def create_app(
     lookups = Lookups(database)
     refunds = Refunds(database)
     storefront = Storefront(database)
+    account_service = Accounts(database)
     interval = float(os.getenv("SHOP_MONITOR_INTERVAL_S") or 5)  # 0이면 주기 판정을 끈다
 
     recheck_every = float(os.getenv("SHOP_PAYMENT_RECHECK_S") or 30)  # 시간 초과 다시 확인 간격
@@ -596,6 +627,7 @@ def create_app(
     app.state.promotions = promotions
     app.state.lookups = lookups
     app.state.refunds = refunds
+    app.state.accounts = account_service
     inquiry_limiter = inquiries.InquiryRateLimiter()
     app.state.inquiry_limiter = inquiry_limiter
     feedback_limiter = inquiries.InquiryRateLimiter()  # 문의 접수와 한도를 따로 센다
@@ -632,6 +664,44 @@ def create_app(
         """
         fields = {name: getattr(body, name) for name in body.model_fields_set}
         return _ok(storefront.set_profile(buyer_id, fields))
+
+    @app.post("/api/shop/auth/signup", status_code=201)
+    async def auth_signup(body: SignupIn) -> dict:
+        token, user = account_service.signup(
+            body.email,
+            body.password,
+            body.display_name,
+            body.age_band,
+            body.gender,
+            body.job_group,
+        )
+        return _ok({"token": token, "user": user})
+
+    @app.post("/api/shop/auth/login")
+    async def auth_login(body: LoginIn) -> dict:
+        token, user = account_service.login(body.email, body.password)
+        return _ok({"token": token, "user": user})
+
+    @app.post("/api/shop/auth/logout")
+    async def auth_logout(authorization: Annotated[str | None, Header()] = None) -> dict:
+        """보낸 로그인 토큰을 무효로 한다. 토큰이 없거나 이미 무효여도 성공이다."""
+        scheme, _, token = (authorization or "").partition(" ")
+        if scheme.lower() == "bearer" and token.strip():
+            account_service.logout(token.strip())
+        return _ok({})
+
+    @app.get("/api/shop/auth/config")
+    async def auth_config() -> dict:
+        return _ok({"demo_login": accounts.demo_login_enabled()})
+
+    @app.post("/api/shop/auth/demo-login")
+    async def auth_demo_login(body: DemoLoginIn) -> dict:
+        """`SHOP_DEMO_LOGIN=on`일 때만 열린다(옛 데모 구매자에게 비밀번호 없이 세션을 준다)."""
+        if not accounts.demo_login_enabled():
+            raise ShopError("NOT_FOUND", "없는 경로다", 404)
+        inquiries.buyer_number(body.buyer_id)
+        token, user = account_service.demo_login(body.buyer_id)
+        return _ok({"token": token, "user": user})
 
     @app.post("/api/shop/sessions")
     async def select_user(body: SessionIn) -> dict:

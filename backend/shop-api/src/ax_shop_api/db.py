@@ -28,6 +28,16 @@ CREATE TABLE IF NOT EXISTS products (
 CREATE TABLE IF NOT EXISTS buyers (
   buyer_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, context_id TEXT, created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS accounts (
+  buyer_id TEXT PRIMARY KEY REFERENCES buyers(buyer_id), email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL, display_name TEXT NOT NULL, agreed_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash TEXT PRIMARY KEY, buyer_id TEXT NOT NULL, created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_buyer ON sessions(buyer_id);
 CREATE TABLE IF NOT EXISTS orders (
   order_id TEXT PRIMARY KEY, buyer_id TEXT NOT NULL REFERENCES buyers(buyer_id),
   status TEXT NOT NULL, total_amount INTEGER NOT NULL, tenant_id TEXT NOT NULL,
@@ -155,6 +165,9 @@ _ADDED_COLUMNS = {
         ("age_band", "TEXT"),
         # 구매자 성별 코드(`female`·`male`·`no_answer`). 비어 있으면 모르는 것이다. 채워 넣지 않는다
         ("gender", "TEXT"),
+        # 직업군 코드(선택). 비어 있으면 모르는 것이다
+        ("job_group", "TEXT"),
+        ("updated_at", "TEXT"),
     ),
     # 책 정보(선택). 외부 도서 자료와 ISBN으로 정확히 잇는 데 쓴다. 비어 있으면 모르는 것이다
     "products": (("isbn13", "TEXT"), ("author", "TEXT"), ("publisher", "TEXT")),
