@@ -1,5 +1,5 @@
 import { SHOP_API_URL } from "./env";
-import type { Banner, CartPrice, Category, ClaimInput, ClaimReceipt, DemoUser, IdeaInput, IdeaReceipt, Inquiry, InquiryInput, MyClaim, MyIdea, Order, OrderLineInput, PaymentConfig, Product, Seller, TossPrepared } from "./types";
+import type { AgeBand, Banner, CartPrice, Category, ClaimInput, ClaimReceipt, DemoUser, IdeaInput, IdeaReceipt, Inquiry, InquiryInput, MyClaim, MyIdea, Order, OrderLineInput, PaymentConfig, Product, Seller, TossPrepared } from "./types";
 
 // 판매 사이트 → shop-api(`/api/shop/*`)의 모든 호출은 이 파일 한 곳에 둔다.
 // 성공은 `{data, meta}`, 실패는 `{error: {code, message}}`. 로그인·토큰은 없고 구매자는 가명 ID(`buy_0001`…)다.
@@ -58,6 +58,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 const post = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 
+const patch = <T>(path: string, body: unknown) =>
+  request<T>(path, { method: "PATCH", body: JSON.stringify(body) });
+
 const notReady = <T>(feature: string): Promise<T> => Promise.reject(new NotReadyError(feature));
 
 export const api = {
@@ -98,6 +101,9 @@ export const api = {
   demoUser: (buyerId: string) => request<DemoUser>(`/api/shop/users/${encodeURIComponent(buyerId)}`),
   /** 구매자 선택. 서버는 토큰을 내주지 않고 `{user}`만 돌려준다. */
   selectUser: (buyerId: string) => post<{ user: DemoUser }>("/api/shop/sessions", { buyer_id: buyerId }),
+  /** 연령대 구간을 정한다(null이면 지운다). 비밀번호·토큰은 없다(데모). */
+  setAgeBand: (buyerId: string, ageBand: AgeBand | null) =>
+    patch<DemoUser>(`/api/shop/users/${encodeURIComponent(buyerId)}`, { age_band: ageBand }),
   /** 게시 중이고 기간 안인 공지 배너(토큰 없음). 서버는 게시 오래된 순으로 준다. */
   banners: () => request<Banner[]>("/api/shop/banners"),
   /** `name`이 null이면 코드를 그대로 보여 준다. */

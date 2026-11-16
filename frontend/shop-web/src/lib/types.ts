@@ -71,7 +71,17 @@ export interface Claim {
 
 // ---------------------------------------------------------------- 데모 사용자·카테고리·장바구니 가격
 /** 가명 구매자. 이름은 표시용 데모 이름이고 개인정보·적립금은 없다. */
-export interface DemoUser { buyer_id: string; display_name: string }
+/** 구매자 연령대 구간. 생년월일·나이는 받지 않고 구간만 저장한다. 모르면 null. */
+export type AgeBand = "10s" | "20s" | "30s" | "40s" | "50s_plus";
+export const AGE_BANDS: { value: AgeBand; label: string }[] = [
+  { value: "10s", label: "10대" },
+  { value: "20s", label: "20대" },
+  { value: "30s", label: "30대" },
+  { value: "40s", label: "40대" },
+  { value: "50s_plus", label: "50대 이상" },
+];
+/** 목록(`GET /api/shop/users`)에는 `age_band`가 없고, 한 명 조회·선택(`sessions`) 응답에만 있다. */
+export interface DemoUser { buyer_id: string; display_name: string; age_band?: AgeBand | null }
 /** `GET /api/shop/banners`가 주는 게시 중 배너. `text`는 서버가 준 공개 문구 그대로 보여 준다. */
 export interface Banner { notice_id: string; text: string; status: string; valid_from: string | null; valid_to: string | null; context_id: string | null; created_at: string; ended_at: string | null }
 /** 표시 이름(`name`)을 모르는 코드는 null이다. 지어내지 않고 코드를 그대로 보여 준다. */

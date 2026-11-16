@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "@/lib/nav";
 import { ErrorNote, NotReady, PageTitle } from "@/components/shop/bits";
+import AgeBandPicker from "@/components/shop/AgeBandPicker";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { DemoUser } from "@/lib/types";
@@ -43,7 +44,12 @@ export default function LoginPage() {
           </li>
         ))}
       </ul>
-      {user && <button className="btn-ghost mt-4 text-sm" onClick={logout}>선택 해제</button>}
+      {user && (
+        <div className="mt-4 grid gap-3">
+          <AgeBandPicker buyerId={user.id} />
+          <button className="btn-ghost justify-self-start text-sm" onClick={logout}>선택 해제</button>
+        </div>
+      )}
     </div>
   );
 }
