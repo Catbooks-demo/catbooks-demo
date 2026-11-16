@@ -59,7 +59,9 @@ def _product(
 ) -> None:
     with db.tx() as conn:
         conn.execute(
-            "INSERT INTO products VALUES (?, ?, ?, ?, ?, 1, ?, ?, NULL, ?, ?)",
+            "INSERT INTO products (product_id, seller_id, name, category_code, price, stock,"
+            " active, tenant_id, context_id, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, 1, ?, ?, NULL, ?, ?)",
             (
                 product_id,
                 seller_id,

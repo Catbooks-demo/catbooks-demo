@@ -27,7 +27,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import AwareDatetime, BaseModel, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
 
 from ax_agent_template.config import set_agent_name
 from ax_agent_template.server import verify_token
@@ -37,6 +37,7 @@ from ax_contracts.data_access.shop_metric_series import ShopMetricSeriesQuery
 from ax_contracts.data_access.shop_seller_prices import ShopSellerPricesQuery
 from ax_contracts.data_access.shop_seller_profile import ShopSellerProfileQuery
 from ax_shop_api import (
+    book_info,
     claim_inbox,
     idea_inbox,
     inbox,
@@ -63,7 +64,29 @@ from ax_shop_api.service import (
 from ax_shop_api.storefront import Storefront
 
 
-class ProductIn(BaseModel):
+class BookInfoIn(BaseModel):
+    """상품에 붙는 선택 책 정보. 비워 두면 모르는 것이다(값을 지어내지 않는다)."""
+
+    isbn13: str | None = (
+        None  # 하이픈은 뺀다. 13자리·978/979로 시작·확인 숫자가 맞아야 한다(아니면 422)
+    )
+    author: str | None = Field(default=None, max_length=book_info.AUTHOR_MAX)
+    publisher: str | None = Field(default=None, max_length=book_info.PUBLISHER_MAX)
+
+    @field_validator("isbn13", mode="before")
+    @classmethod
+    def _isbn(cls, value: Any) -> Any:
+        return (
+            book_info.normalize_isbn13(value) if isinstance(value, str) or value is None else value
+        )
+
+    @field_validator("author", "publisher", mode="before")
+    @classmethod
+    def _text(cls, value: Any) -> Any:
+        return book_info.clean_text(value) if isinstance(value, str) or value is None else value
+
+
+class ProductIn(BookInfoIn):
     seller_id: str
     name: str
     category_code: str
@@ -71,7 +94,7 @@ class ProductIn(BaseModel):
     stock: int = Field(ge=0)
 
 
-class SellerProductIn(BaseModel):
+class SellerProductIn(BookInfoIn):
     name: str
     category_code: str
     price: int = Field(ge=0)
@@ -87,7 +110,9 @@ class SellerIn(BaseModel):
     products: list[SellerProductIn] = Field(default_factory=list, max_length=500)
 
 
-class ProductPatch(BaseModel):
+class ProductPatch(BookInfoIn):
+    """상품 수정. 책 정보는 `null`·빈 글을 보내면 지운다(칸을 안 보내면 그대로)."""
+
     name: str | None = None
     price: int | None = Field(default=None, ge=0)
     stock: int | None = Field(default=None, ge=0)
@@ -644,7 +669,11 @@ def create_app(
     async def update_product(
         product_id: str, body: ProductPatch, _: str = Depends(_caller(PRODUCT_WRITERS))
     ) -> dict:
-        return _ok(shop.update_product(product_id, body.model_dump(exclude_none=True)))
+        changes = body.model_dump(exclude_none=True)
+        for key in ("isbn13", "author", "publisher"):  # 보냈으면 null도 "지움"이다
+            if key in body.model_fields_set:
+                changes[key] = getattr(body, key)
+        return _ok(shop.update_product(product_id, changes))
 
     # 동기 핸들러: FastAPI가 스레드에서 돌려 DB를 읽는 동안 이벤트 루프(/health 등)를 막지 않는다.
     # Db는 연결 하나를 RLock으로 감싸고(check_same_thread=False) sqlite는 직렬 모드라
