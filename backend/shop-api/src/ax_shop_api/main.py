@@ -184,7 +184,7 @@ class SignupIn(BaseModel):
     agree_privacy: Literal[True]
     age_band: Literal["10s", "20s", "30s", "40s", "50s_plus"] | None = None
     gender: Literal["female", "male", "no_answer"] | None = None
-    job_group: Literal["student", "employee", "self_employed", "other", "no_answer"] | None = None
+    occupation: Literal["student", "employee", "self_employed", "other", "no_answer"] | None = None
 
 
 class LoginIn(BaseModel):
@@ -208,7 +208,7 @@ class MeIn(BaseModel):
     display_name: str | None = Field(default=None, max_length=200)
     age_band: Literal["10s", "20s", "30s", "40s", "50s_plus"] | None = None
     gender: Literal["female", "male", "no_answer"] | None = None
-    job_group: Literal["student", "employee", "self_employed", "other", "no_answer"] | None = None
+    occupation: Literal["student", "employee", "self_employed", "other", "no_answer"] | None = None
 
     @model_validator(mode="after")
     def _at_least_one_field(self) -> MeIn:
@@ -848,7 +848,7 @@ def create_app(
             body.display_name,
             body.age_band,
             body.gender,
-            body.job_group,
+            body.occupation,
         )
         return _ok({"token": token, "user": user})
 
@@ -1700,6 +1700,21 @@ def create_app(
         if from_.tzinfo is None or to.tzinfo is None:
             raise ShopError("INVALID_QUERY", "from·to에는 시간대가 필요하다")
         return _ok(lookups.sales_summary(from_, to, group_by))
+
+    @app.get("/api/shop/customers/export")
+    def customers_export(
+        cursor: Annotated[str | None, Query(max_length=256)] = None,
+        limit: Annotated[int, Query(ge=1, le=5000)] = 1000,
+        _: str = Depends(_caller(DATA_READERS)),
+    ) -> dict:
+        """가명 ID와 연령대·성별·직업군만 준다(이름·연락처 없음). `data`·`admin` 토큰만.
+
+        `meta.next_cursor`는 늘 마지막 줄의 커서(빈 페이지면 받은 커서)이고
+        `meta.has_more`가 참인 동안 이어 읽는다.
+        끝난 뒤 그 커서를 두었다가 다음에 읽으면 그 뒤에 바뀐 구매자만 나온다.
+        """
+        data, next_cursor, has_more = lookups.customer_export(cursor, limit)
+        return _ok(data, next_cursor=next_cursor, has_more=has_more)
 
     @app.get("/api/shop/metric-series")
     def metric_series(

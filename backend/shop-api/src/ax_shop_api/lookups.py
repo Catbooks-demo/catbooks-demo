@@ -21,6 +21,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import math
 from collections import defaultdict
 from collections.abc import Callable
@@ -168,6 +170,59 @@ class Lookups:
         return ShopFailedOrdersResult(
             orders=orders, collected_at=self.now(), truncated=len(rows) > query.limit
         )
+
+    def customer_export(
+        self, cursor: str | None, limit: int
+    ) -> tuple[list[dict[str, Any]], str | None, bool]:
+        """고객 내보내기: 가명 ID(`buyer_id`)와 연령대·성별·직업군뿐이다(이름·연락처 없음).
+
+        `(change_seq, buyer_id)`(바뀐 순서, 없으면 0) 순으로 `limit`줄씩 준다. 커서는 마지막 줄의
+        그 두 값을 이은 불투명 문자열이고, 프로필을 고친 구매자는 다음 읽기에 다시 나온다.
+        """
+        after: tuple[int, str] | None = None
+        if cursor:
+            try:
+                raw = base64.urlsafe_b64decode(cursor.encode()).decode()
+                seq_text, _, buyer_id = raw.partition("|")
+                seq = int(seq_text)
+            except (binascii.Error, UnicodeError, ValueError):
+                seq, buyer_id = 0, ""
+            if not buyer_id:
+                raise ShopError("INVALID_CURSOR", "cursor가 올바르지 않다", 400)
+            after = (seq, buyer_id)
+        sql = (
+            "SELECT buyer_id, age_band, gender, occupation, created_at, updated_at, "
+            "COALESCE(change_seq, 0) AS seq FROM buyers WHERE tenant_id = ?"
+        )
+        params: list[Any] = [TENANT_ID]
+        if after:
+            sql += (
+                " AND (COALESCE(change_seq, 0) > ?"
+                " OR (COALESCE(change_seq, 0) = ? AND buyer_id > ?))"
+            )
+            params += [after[0], after[0], after[1]]
+        sql += " ORDER BY COALESCE(change_seq, 0), buyer_id LIMIT ?"
+        params.append(limit + 1)
+        with self.db.tx() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        page = rows[:limit]
+        data = [
+            {
+                "buyer_id": r["buyer_id"],
+                "age_band": r["age_band"],
+                "gender": r["gender"],
+                "occupation": r["occupation"],
+                "created_at": r["created_at"],
+                "updated_at": r["updated_at"],
+            }
+            for r in page
+        ]
+        next_cursor = cursor or None  # 빈 페이지면 받은 커서를 그대로 돌려준다
+        if page:
+            last = page[-1]
+            raw = f"{last['seq']}|{last['buyer_id']}"
+            next_cursor = base64.urlsafe_b64encode(raw.encode()).decode()
+        return data, next_cursor, len(rows) > limit
 
     def attributed_orders(
         self,
