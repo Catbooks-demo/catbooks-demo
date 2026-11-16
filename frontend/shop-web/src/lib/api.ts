@@ -1,8 +1,8 @@
 import { SHOP_API_URL } from "./env";
-import type { AgeBand, Banner, CartPrice, Category, ClaimInput, ClaimReceipt, DemoUser, IdeaInput, IdeaReceipt, Inquiry, InquiryInput, MyClaim, MyIdea, Order, OrderLineInput, PaymentConfig, Product, Seller, TossPrepared } from "./types";
+import type { AgeBand, Banner, CartPrice, Category, ClaimInput, ClaimReceipt, DemoUser, IdeaInput, IdeaReceipt, Inquiry, Me, MeUpdate, SignupInput, InquiryInput, MyClaim, MyIdea, Order, OrderLineInput, PaymentConfig, Product, Seller, TossPrepared } from "./types";
 
 // 판매 사이트 → shop-api(`/api/shop/*`)의 모든 호출은 이 파일 한 곳에 둔다.
-// 성공은 `{data, meta}`, 실패는 `{error: {code, message}}`. 로그인·토큰은 없고 구매자는 가명 ID(`buy_0001`…)다.
+// 성공은 `{data, meta}`, 실패는 `{error: {code, message}}`. 구매자는 이메일로 가입·로그인하고 로그인 토큰을 `Authorization: Bearer`로 보낸다.
 const BASE = SHOP_API_URL;
 
 export class ApiError extends Error {
@@ -19,22 +19,22 @@ export class NotReadyError extends Error {
 }
 export const isNotReady = (e: unknown): e is NotReadyError => e instanceof NotReadyError;
 
-// ---------------------------------------------------------------- 구매자(데모)
-// 구매자 목록은 shop-api(`/api/shop/users`)에서 받는다. 선택한 ID만 sessionStorage에 둔다(비밀번호·토큰 없음).
-const BUYER_KEY = "ax.buyer";
-export function storedBuyer(): string | null {
+// ---------------------------------------------------------------- 로그인 토큰
+// 로그인 토큰은 localStorage(`cb.session`)에 둔다. 비밀번호는 저장하지 않는다.
+const TOKEN_KEY = "cb.session";
+export function storedToken(): string | null {
   try {
-    return sessionStorage.getItem(BUYER_KEY);
+    return localStorage.getItem(TOKEN_KEY);
   } catch {
     return null; // storage blocked
   }
 }
-export function storeBuyer(id: string | null) {
+export function storeToken(t: string | null) {
   try {
-    if (id) sessionStorage.setItem(BUYER_KEY, id);
-    else sessionStorage.removeItem(BUYER_KEY);
+    if (t) localStorage.setItem(TOKEN_KEY, t);
+    else localStorage.removeItem(TOKEN_KEY);
   } catch {
-    /* session-only */
+    /* 저장 못 하면 이 탭에서만 유지 */
   }
 }
 
@@ -43,13 +43,18 @@ interface Body<T> { data?: T; meta?: Record<string, unknown>; error?: { code?: s
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
+  const token = storedToken();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
   try {
-    res = await fetch(`${BASE}${path}`, { ...init, headers: { "Content-Type": "application/json" }, cache: "no-store" });
+    res = await fetch(`${BASE}${path}`, { ...init, headers, cache: "no-store" });
   } catch {
     throw new ApiError(`판매 서버(shop-api, ${BASE})에 연결할 수 없습니다. 서버가 실행 중인지 확인하세요.`, 0);
   }
   const body = (await res.json().catch(() => null)) as Body<T> | null;
   if (!res.ok || !body || body.data === undefined) {
+    const code = body?.error?.code;
+    if (res.status === 401 && (code === "UNAUTHORIZED" || code === "LOGIN_REQUIRED")) storeToken(null);
     throw new ApiError(body?.error?.message ?? `요청 실패 (${res.status})`, res.status, body?.error?.code);
   }
   return body.data;
@@ -99,8 +104,18 @@ export const api = {
   /** 데모 구매자 목록(가명 ID + 표시용 이름). 적립금은 없다. */
   demoUsers: () => request<DemoUser[]>("/api/shop/users"),
   demoUser: (buyerId: string) => request<DemoUser>(`/api/shop/users/${encodeURIComponent(buyerId)}`),
-  /** 구매자 선택. 서버는 토큰을 내주지 않고 `{user}`만 돌려준다. */
-  selectUser: (buyerId: string) => post<{ user: DemoUser }>("/api/shop/sessions", { buyer_id: buyerId }),
+  /** 시험용 구매자 로그인(`SHOP_DEMO_LOGIN=on`일 때만). 옛 데모 구매자에게 비밀번호 없이 토큰을 준다. */
+  demoLogin: (buyerId: string) => post<{ token: string; user: Me }>("/api/shop/auth/demo-login", { buyer_id: buyerId }),
+  authConfig: () => request<{ demo_login: boolean }>("/api/shop/auth/config"),
+  signup: (b: SignupInput) => post<{ token: string; user: Me }>("/api/shop/auth/signup", b),
+  login: (email: string, password: string) => post<{ token: string; user: Me }>("/api/shop/auth/login", { email, password }),
+  /** 이 토큰을 무효로 한다. 이미 무효여도 성공이다. */
+  logout: () => post<Record<string, never>>("/api/shop/auth/logout"),
+  me: () => request<Me>("/api/shop/me"),
+  /** 보낸 칸만 바뀐다. 연령대·성별·직업은 null이면 지운다. */
+  updateMe: (b: MeUpdate) => patch<Me>("/api/shop/me", b),
+  /** 바꾸면 이 기기를 뺀 다른 로그인은 모두 끊긴다. */
+  changePassword: (current: string, next: string) => post<{ changed: boolean }>("/api/shop/me/password", { current, new: next }),
   /** 연령대 구간을 정한다(null이면 지운다). 비밀번호·토큰은 없다(데모). */
   setAgeBand: (buyerId: string, ageBand: AgeBand | null) =>
     patch<DemoUser>(`/api/shop/users/${encodeURIComponent(buyerId)}`, { age_band: ageBand }),

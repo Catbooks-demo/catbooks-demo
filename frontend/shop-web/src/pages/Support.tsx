@@ -35,7 +35,7 @@ const orderLabel = (o: Order) => `${o.order_id} · ${ORDER_STATUS_KO[o.status] ?
 
 export default function SupportPage() {
   const { user, ready } = useAuth();
-  const buyer = user?.id;
+  const buyer = user?.buyer_id;
   // 결제 실패 화면 등에서 넘어온 주문 번호. 내 주문 목록에 있을 때만 미리 선택한다.
   const wanted = useSearchParams().get("order_id");
 

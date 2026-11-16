@@ -46,11 +46,11 @@ export function ShopShell({ children }: { children: ReactNode }) {
           <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1 whitespace-nowrap">
             {user ? (
               <>
-                <span className="font-medium text-ink-700">{user.name ?? user.id}</span>
-                <button className="hover:text-ink-900" onClick={() => { logout(); router.push("/"); }}>선택 해제</button>
+                <span className="font-medium text-ink-700">{user.display_name}</span>
+                <button className="hover:text-ink-900" onClick={() => { void logout().then(() => router.push("/")); }}>로그아웃</button>
               </>
             ) : (
-              <Link href="/login" className="hover:text-ink-900">구매자 선택</Link>
+              <><Link href="/login" className="hover:text-ink-900">로그인</Link><Link href="/signup" className="hover:text-ink-900">회원가입</Link></>
             )}
             <Link href="/orders" className="hover:text-ink-900">주문·배송</Link>
             {/* 다른 앱(게이트웨이의 /admin/)이라 라우터 Link가 아니라 일반 <a>로 연다. Link는 http(s)가 아니면 쇼핑몰 안 경로로 처리한다 */}

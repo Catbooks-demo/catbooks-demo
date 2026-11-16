@@ -80,6 +80,30 @@ export const AGE_BANDS: { value: AgeBand; label: string }[] = [
   { value: "40s", label: "40대" },
   { value: "50s_plus", label: "50대 이상" },
 ];
+export type Gender = "female" | "male" | "no_answer";
+export const GENDERS: { value: Gender; label: string }[] = [
+  { value: "female", label: "여성" },
+  { value: "male", label: "남성" },
+  { value: "no_answer", label: "응답 안 함" },
+];
+export type Occupation = "student" | "employee" | "self_employed" | "other" | "no_answer";
+export const OCCUPATIONS: { value: Occupation; label: string }[] = [
+  { value: "student", label: "학생" },
+  { value: "employee", label: "직장인" },
+  { value: "self_employed", label: "자영업" },
+  { value: "other", label: "기타" },
+  { value: "no_answer", label: "응답 안 함" },
+];
+/** 로그인한 구매자 본인(`GET /api/shop/me`). 프로필 칸은 고르지 않았으면 null(모름)이다. */
+export interface Me {
+  buyer_id: string; display_name: string; email: string | null;
+  age_band: AgeBand | null; gender: Gender | null; occupation: Occupation | null;
+}
+export interface SignupInput {
+  email: string; password: string; display_name: string; agree_terms: true; agree_privacy: true;
+  age_band?: AgeBand; gender?: Gender; occupation?: Occupation;
+}
+export type MeUpdate = Partial<Pick<Me, "display_name" | "age_band" | "gender" | "occupation">>;
 /** 목록(`GET /api/shop/users`)에는 `age_band`가 없고, 한 명 조회·선택(`sessions`) 응답에만 있다. */
 export interface DemoUser { buyer_id: string; display_name: string; age_band?: AgeBand | null }
 /** `GET /api/shop/banners`가 주는 게시 중 배너. `text`는 서버가 준 공개 문구 그대로 보여 준다. */

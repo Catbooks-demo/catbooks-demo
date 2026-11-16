@@ -1,55 +1,48 @@
-import { useEffect, useState } from "react";
-import { useRouter } from "@/lib/nav";
-import { ErrorNote, NotReady, PageTitle } from "@/components/shop/bits";
-import AgeBandPicker from "@/components/shop/AgeBandPicker";
-import { api } from "@/lib/api";
+import { useState, type FormEvent } from "react";
+import { Link, useRouter } from "@/lib/nav";
+import { ErrorNote, PageTitle } from "@/components/shop/bits";
 import { useAuth } from "@/lib/auth";
-import type { DemoUser } from "@/lib/types";
 
 export default function LoginPage() {
-  const { login, logout, user } = useAuth();
+  const { login } = useAuth();
   const router = useRouter();
-  const [users, setUsers] = useState<DemoUser[] | null>(null);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => { api.demoUsers().then(setUsers).catch((e: Error) => setError(e.message)); }, []);
-
-  async function pick(id: string) {
-    setBusyId(id);
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    setBusy(true);
     setError(null);
     try {
-      await login(id);
+      await login(email.trim(), password);
       router.push("/orders");
-    } catch (e) {
-      setError((e as Error).message);
-      setBusyId(null);
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(false);
     }
   }
 
   return (
-    <div className="mx-auto max-w-xl">
-      <PageTitle title="구매자 선택" sub="비밀번호 없이 데모 구매자 한 명을 골라 주문과 환불 신청을 해 볼 수 있습니다. 개인정보는 없고 가명 ID와 데모 이름만 보입니다." />
-      <div className="mb-4"><NotReady feature="적립금 조회" /></div>
+    <div className="mx-auto max-w-md">
+      <PageTitle title="로그인" sub="가입한 이메일과 비밀번호로 로그인해요." />
       <ErrorNote error={error} />
-      {!users && !error && <p className="py-6 text-center text-sm text-ink-500">불러오는 중…</p>}
-      <ul className="grid gap-2 sm:grid-cols-3">
-        {(users ?? []).map((u) => (
-          <li key={u.buyer_id}>
-            <button onClick={() => pick(u.buyer_id)} disabled={busyId !== null} aria-pressed={user?.id === u.buyer_id}
-              className={`w-full rounded-xl border bg-surface p-3 text-left text-sm transition hover:border-brand-500 ${user?.id === u.buyer_id ? "border-brand-600" : "border-ink-100"}`}>
-              <span className="block font-medium">{u.display_name}</span>
-              <span className="block font-mono text-xs text-ink-500">{u.buyer_id}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
-      {user && (
-        <div className="mt-4 grid gap-3">
-          <AgeBandPicker buyerId={user.id} />
-          <button className="btn-ghost justify-self-start text-sm" onClick={logout}>선택 해제</button>
-        </div>
-      )}
+      <form onSubmit={submit} className="grid gap-3 rounded-xl border border-ink-100 bg-surface p-4">
+        <label className="grid gap-1 text-sm">
+          <span className="font-medium">이메일</span>
+          <input className="field" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+        </label>
+        <label className="grid gap-1 text-sm">
+          <span className="font-medium">비밀번호</span>
+          <input className="field" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
+        </label>
+        <button className="btn-primary" disabled={busy}>{busy ? "로그인 중…" : "로그인"}</button>
+      </form>
+      <p className="mt-4 text-center text-sm text-ink-500">
+        아직 계정이 없나요? <Link href="/signup" className="font-semibold text-brand-600 underline">회원가입</Link>
+      </p>
     </div>
   );
 }
