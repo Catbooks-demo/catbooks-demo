@@ -22,8 +22,13 @@ def _mock_mode(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def client() -> TestClient:
-    return TestClient(create_app(Db(":memory:")))
+def db() -> Db:
+    return Db(":memory:")
+
+
+@pytest.fixture
+def client(db: Db) -> TestClient:
+    return TestClient(create_app(db))
 
 
 def _buyers(client: TestClient) -> list[str]:
@@ -76,10 +81,12 @@ def test_a_group_below_five_buyers_hides_its_numbers(client: TestClient) -> None
     ]
 
 
-def test_five_buyers_show_their_numbers(client: TestClient) -> None:
+def test_five_buyers_show_their_numbers(client: TestClient, db: Db) -> None:
     ids = _buyers(client)
     for buyer in ids[:5]:
-        client.patch(f"/api/shop/users/{buyer}", json={"gender": "male", "occupation": "student"})
+        client.patch(f"/api/shop/users/{buyer}", json={"gender": "male"})
+        with db.tx() as conn:  # 직업군은 회원 가입·프로필(accounts)이 `job_group`에 저장한다
+            conn.execute("UPDATE buyers SET job_group = 'student' WHERE buyer_id = ?", (buyer,))
         _buy(client, buyer, qty=3)
     for group in ("gender", "occupation", "gender,occupation"):
         (row,) = _rows(client, group)

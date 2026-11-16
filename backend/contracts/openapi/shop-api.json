@@ -349,6 +349,21 @@
         "title": "DeliveredIn",
         "type": "object"
       },
+      "DemoLoginIn": {
+        "additionalProperties": false,
+        "properties": {
+          "buyer_id": {
+            "maxLength": 32,
+            "title": "Buyer Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "buyer_id"
+        ],
+        "title": "DemoLoginIn",
+        "type": "object"
+      },
       "FaultIn": {
         "properties": {
           "delay_ms": {
@@ -626,6 +641,27 @@
           "outcome"
         ],
         "title": "IntakeSyncedIn",
+        "type": "object"
+      },
+      "LoginIn": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "maxLength": 1024,
+            "title": "Email",
+            "type": "string"
+          },
+          "password": {
+            "maxLength": 1024,
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "LoginIn",
         "type": "object"
       },
       "OrderIn": {
@@ -957,7 +993,7 @@
       },
       "ProfileIn": {
         "additionalProperties": false,
-        "description": "구매자 프로필. 연령대 구간·성별·직업군 코드만 받는다(생년월일·나이·세부 직업은 받지 않는다).\n\n보낸 칸만 바꾼다(안 보낸 칸은 그대로). null이면 지운다. 칸이 하나도 없으면 422다.",
+        "description": "구매자 프로필. 연령대 구간과 성별 코드만 받는다(생년월일·나이·직업은 받지 않는다).\n\n보낸 칸만 바꾼다(안 보낸 칸은 그대로). null이면 지운다. 칸이 하나도 없으면 422다.",
         "properties": {
           "age_band": {
             "anyOf": [
@@ -992,24 +1028,6 @@
               }
             ],
             "title": "Gender"
-          },
-          "occupation": {
-            "anyOf": [
-              {
-                "enum": [
-                  "student",
-                  "employee",
-                  "self_employed",
-                  "other",
-                  "no_answer"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Occupation"
           }
         },
         "title": "ProfileIn",
@@ -1205,6 +1223,98 @@
           }
         },
         "title": "ShippedIn",
+        "type": "object"
+      },
+      "SignupIn": {
+        "additionalProperties": false,
+        "description": "이메일 가입. 연령대·성별·직업군은 선택이고 코드값만 받는다(안 보내면 모르는 것이다).",
+        "properties": {
+          "age_band": {
+            "anyOf": [
+              {
+                "enum": [
+                  "10s",
+                  "20s",
+                  "30s",
+                  "40s",
+                  "50s_plus"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age Band"
+          },
+          "agree_privacy": {
+            "const": true,
+            "title": "Agree Privacy",
+            "type": "boolean"
+          },
+          "agree_terms": {
+            "const": true,
+            "title": "Agree Terms",
+            "type": "boolean"
+          },
+          "display_name": {
+            "maxLength": 200,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "email": {
+            "maxLength": 318,
+            "title": "Email",
+            "type": "string"
+          },
+          "gender": {
+            "anyOf": [
+              {
+                "enum": [
+                  "female",
+                  "male",
+                  "no_answer"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gender"
+          },
+          "job_group": {
+            "anyOf": [
+              {
+                "enum": [
+                  "student",
+                  "employee",
+                  "self_employed",
+                  "other",
+                  "no_answer"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Group"
+          },
+          "password": {
+            "maxLength": 1024,
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password",
+          "display_name",
+          "agree_terms",
+          "agree_privacy"
+        ],
+        "title": "SignupIn",
         "type": "object"
       },
       "TossConfirmIn": {
@@ -3569,6 +3679,196 @@
         "summary": "Mark Return Synced"
       }
     },
+    "/api/shop/auth/config": {
+      "get": {
+        "operationId": "auth_config_api_shop_auth_config_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Auth Config Api Shop Auth Config Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Auth Config"
+      }
+    },
+    "/api/shop/auth/demo-login": {
+      "post": {
+        "description": "`SHOP_DEMO_LOGIN=on`일 때만 열린다(옛 데모 구매자에게 비밀번호 없이 세션을 준다).",
+        "operationId": "auth_demo_login_api_shop_auth_demo_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DemoLoginIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Auth Demo Login Api Shop Auth Demo Login Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Auth Demo Login"
+      }
+    },
+    "/api/shop/auth/login": {
+      "post": {
+        "operationId": "auth_login_api_shop_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Auth Login Api Shop Auth Login Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Auth Login"
+      }
+    },
+    "/api/shop/auth/logout": {
+      "post": {
+        "description": "보낸 로그인 토큰을 무효로 한다. 토큰이 없거나 이미 무효여도 성공이다.",
+        "operationId": "auth_logout_api_shop_auth_logout_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Auth Logout Api Shop Auth Logout Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Auth Logout"
+      }
+    },
+    "/api/shop/auth/signup": {
+      "post": {
+        "operationId": "auth_signup_api_shop_auth_signup_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignupIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Auth Signup Api Shop Auth Signup Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Auth Signup"
+      }
+    },
     "/api/shop/banners": {
       "get": {
         "operationId": "list_banners_api_shop_banners_get",
@@ -5721,7 +6021,7 @@
         "summary": "Get User"
       },
       "patch": {
-        "description": "연령대(`age_band`)·성별(`gender`)·직업군(`occupation`)을 정한다(null이면 지운다).\n\n보낸 칸만 바꾼다.\n\n비밀번호·토큰은 없다(데모).",
+        "description": "연령대 구간(`age_band`)·성별(`gender`)을 정한다(null이면 지운다).\n\n보낸 칸만 바꾼다.\n\n비밀번호·토큰은 없다(데모).",
         "operationId": "update_profile_api_shop_users__buyer_id__patch",
         "parameters": [
           {

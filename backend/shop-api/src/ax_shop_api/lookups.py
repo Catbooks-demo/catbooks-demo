@@ -283,7 +283,9 @@ class Lookups:
             "product": ("i.product_id", "product_id"),
             "age_band": ("b.age_band", "age_band"),
             "gender": ("b.gender", "gender"),
-            "occupation": ("b.occupation", "occupation"),
+            # 직업군은 회원 가입 쪽(accounts)이 `buyers.job_group`으로 저장한다(`occupation`으로
+            # 이름을 바꾸는 작업이 따로 있다). 바뀌면 이 열 이름만 `b.occupation`으로 고친다
+            "occupation": ("b.job_group", "occupation"),
             "category": ("pr.category_code", "category_code"),
         }
         select = ", ".join(f"{columns[g][0]} AS {columns[g][1]}" for g in groups)
