@@ -15,7 +15,7 @@
 
 | 메서드·경로 | 내용 |
 | --- | --- |
-| `GET /api/shop/products?q&genre&sort&page&size` | 쿼리가 없으면 지금처럼 활성 상품 **전체 배열**(AXcellent가 이렇게 읽는다). `q`는 이름·저자·출판사 부분 일치(대소문자 무시), `genre`는 `genre_code`로 거르고, `sort`는 `popular`(최근 30일 결제 수량, 기본)·`new`·`price_asc`·`price_desc`. `page`(1부터)를 주면 `size`(1~60, 기본 24)개씩 자르고 `meta`에 `total`·`page`·`size`를 싣는다 |
+| `GET /api/shop/products?q&genre&sort&page&size` | 쿼리가 없으면 지금처럼 활성 상품 **전체 배열**(AXcellent가 이렇게 읽는다). `q`는 이름·저자·출판사 부분 일치(대소문자 무시, 100자까지), `genre`는 `genre_code`로 거르고, `sort`는 `popular`(최근 30일 결제 수량, 기본)·`new`·`price_asc`·`price_desc`. `page`(1부터)를 주면 `size`(1~60, 기본 24)개씩 자르고 `meta`에 `total`·`page`·`size`를 싣는다 |
 | `GET /api/shop/genres` | `[{genre_code, name, product_count}]`, `GENRES` 순서, 판매 중 상품 수(토큰 없음) |
 | `GET /api/shop/products/best?genre&days=30&limit=10` | 토큰 없는 공개 베스트. 최근 `days`(1~93)일 **결제된 주문**의 수량 순 상품과 `sold_qty`(`limit` 1~50). `(genre, days, limit)`별로 `SHOP_BEST_CACHE_S`초 프로세스 안에 캐시(수량 묶음을 `(days, genre)`별로 캐시). 인기순·베스트는 환불 안 뺀 **결제 수량**(전액 환불 주문도 안 뺌)을 세므로 `sales-summary`의 `net_qty`와 다르다. 모르는 `genre`는 422 |
 | `GET /api/shop/sellers`, `GET /api/shop/products[?seller_id&category_code]`, `GET /api/shop/products/{id}` | 판매자·상품 조회. 상품에 `description`(소개, 최대 4000자, 모르면 `null`)과 `isbn13`·`author`·`publisher`(책 정보)·`genre_code`(장르 코드, 모르면 `null`)가 있다 |
@@ -81,6 +81,8 @@
 - OpenAPI: `contracts/openapi/shop-api.json`은 CI가 자동 생성한다.
 ## 3-1. 회원 로그인·구매자 본인 확인
 - 가입·로그인: `POST /api/shop/auth/signup`·`/auth/login`이 로그인 토큰을 준다(DB에는 sha256만 둔다). `POST /auth/logout`은 보낸 토큰을 끊는다. 토큰은 `Authorization: Bearer <토큰>`으로 보낸다.
+  - 시도 제한(프로세스 안, `accounts.py` 상수): 로그인은 이메일별 5분 10번·접속 IP별 5분 30번, 가입은 IP별 10분 5번, 비밀번호 확인(`/me/password`·`/me/withdraw`)은 구매자별 5분 10번. 넘으면 429 `RATE_LIMITED`. IP는 연결한 주소만 본다(프록시 헤더는 믿지 않는다). 비밀번호 해시(scrypt)는 스레드에서 돌려 이벤트 루프를 막지 않는다.
+  - `GET /api/shop/auth/demo-buyers` (토큰 없음, `SHOP_DEMO_LOGIN=on`일 때만, 꺼져 있으면 404) → 계정이 없는 옛 데모 구매자 `[{buyer_id, display_name, age_band}]` 최대 60명. 시험용 로그인 화면(`/dev/buyers`)이 쓴다.
 - 구매자 경로(`POST /orders`, `POST /orders/{id}/payments`, `.../payments/toss/prepare`, `POST /payments/toss/confirm`, `POST /orders/{id}/cancel`, `POST·GET /claims`, `POST·GET /inquiries`, `GET /inquiries/{id}`, `POST /inquiries/{id}/feedback`, `POST·GET /ideas`, 쿠폰을 쓸 때의 `POST /cart/price`, `GET·PATCH /users/{buyer_id}`)는 **로그인 토큰이 구매자를 정한다**. 본문·쿼리의 `buyer_id`는 선택이고, 보내면 토큰의 구매자와 같아야 한다(다르면 403 `BUYER_MISMATCH`). 남의 주문을 결제·취소하려 하면 없는 주문과 같은 404다.
   - `admin` 토큰은 `buyer_id`를 함께 보내 구매자를 대신할 수 있다(가상 주문 스크립트·운영자, `buyer_id`가 없으면 422 `BUYER_REQUIRED`). 다른 서비스 토큰은 403.
   - 토큰이 없으면 401 `LOGIN_REQUIRED`(`legacy`에서는 옛 동작대로 요청의 `buyer_id`). 알 수 없는·끊긴 토큰은 어느 모드에서나 401 `UNAUTHORIZED`.
@@ -91,11 +93,12 @@
   - `GET /api/shop/me` → 사용자 `{buyer_id, display_name, email, age_band, gender, occupation}`.
   - `PATCH /api/shop/me` `{display_name?, age_band?, gender?, occupation?}` → 보낸 칸만 바꾼다(코드값만, null이면 지움, 이름은 지울 수 없다, 칸이 없으면 422). `buyers.updated_at`을 적는다.
   - `POST /api/shop/me/password` `{current, new}` → 현재 비밀번호가 틀리면 401 `INVALID_PASSWORD`, 새 비밀번호는 8~128자(422 `WEAK_PASSWORD`), 비밀번호가 없는 데모 구매자는 409 `NO_PASSWORD`. 바꾸면 **지금 토큰을 뺀 이 구매자의 다른 로그인을 모두 끊는다**.
+  - `POST /api/shop/me/withdraw` `{password}` → 회원 탈퇴. 비밀번호가 틀리면 403 `INVALID_PASSWORD`, 데모 구매자는 409 `NO_PASSWORD`. 맞으면 `{withdrawn: true}`이고 계정(이메일·비밀번호 해시·이름)·후기·로그인 토큰을 지우고 연령대·성별·직업군을 비운 뒤 `change_seq`를 올린다(`retention.remove_account`, `purge-buyer`와 같은 함수). 주문·클레임 기록과 구매자 가명 ID는 법정 보존(5년)으로 남는다.
 - 구매 후기(`reviews` 표, 후기 ID `rev_0001`~):
   - `POST /api/shop/products/{product_id}/reviews` `{order_id, rating(1~5), body(10~1000자)}` (구매자 토큰) → 201. 본인 주문이고 그 상품이 품목에 있고 `delivered_at`이 있어야 한다(아니면 403 `NOT_REVIEWABLE`). 주문·상품마다 한 번(409 `REVIEW_EXISTS`).
   - `GET /api/shop/products/{product_id}/reviews?page=&size=` (공개, 최신순, `size` 기본 10·최대 50) → `{data: {summary: {count, avg, by_rating: {"1".."5"}}, items: [{review_id, rating, body, created_at, author_label}]}, meta: {total, page, size}}`. `author_label`은 연령대가 있으면 `10대`~`40대`·`50대 이상`, 없으면 `구매자`. 구매자 ID·이름은 싣지 않는다.
   - `GET /api/shop/me/reviews` (구매자 토큰) → 내 후기(`product_id`·`order_id` 포함). `GET /api/shop/me/reviewable` → 아직 후기를 안 쓴 배송 완료 품목 `[{order_id, product_id, title}]`.
-  - 보유기간 삭제로 구매자 행이 지워지면 그 구매자의 후기도 같이 지운다.
+  - 보유기간 삭제로 구매자 행이 지워지거나, 회원 탈퇴·삭제 요청 집행 때 그 구매자의 후기도 같이 지운다.
 
 | 환경변수 | 기본값 | 뜻 |
 | --- | --- | --- |
@@ -104,13 +107,14 @@
 | `SHOP_ORDERS_PUBLIC_READ` | `on` | `off`면 토큰 없는 주문 조회를 401로 막는다 |
 | `SHOP_DEMO_LOGIN` | (꺼짐) | `on`일 때만 비밀번호 없는 데모 로그인(`POST /auth/demo-login`, `POST /sessions`)이 열린다. 배포에는 넣지 않는다 |
 | `SHOP_SESSION_DAYS` | 30 | 로그인 토큰 유효 일수(1~3650, 그 밖의 값은 기본값) |
+| `SHOP_TRUST_PROXY` | (꺼짐) | `on`이면 로그인·가입 시도 제한이 `X-Forwarded-For`의 마지막 값(게이트웨이가 붙인 손님 주소)을 쓴다. 게이트웨이 뒤에서만 켜고, 그때는 판매 서버 포트를 밖에 열지 않는다(헤더를 꾸밀 수 있다) |
 
 가상 주문 스크립트(`backend/scripts/shop_traffic.py`)는 `required`에서 `admin` 토큰 + `buyer_id` 또는 회원 로그인으로 바꿔야 한다.
 
 ## 4. 의존
 `ax-contracts`, `ax-agent-template`. 다른 부서 폴더를 import하지 않는다.
 ## 4-1. 보유기간 삭제 (retention)
-개인정보처리방침 제4조의 보유기간을 코드로 옮긴 것이다(`retention.py`). **삭제는 기본 dry-run(건수만 센다)이고, 실제 삭제(apply)는 사람이 켠다.** 5년은 방침 제4조 기준이며, 모의 거래에도 적용할지(제4조 ⑦)는 미확정이라 설정값이다. 외부에 열린 삭제 엔드포인트는 없고, 삭제 요청의 집행은 사람 승인 뒤 운영자가 CLI로만 한다.
+개인정보처리방침 제4조의 보유기간을 코드로 옮긴 것이다(`retention.py`). **삭제는 기본 dry-run(건수만 센다)이고, 실제 삭제(apply)는 사람이 켠다.** 5년은 방침 제4조 기준이며, 모의 거래에도 적용할지(제4조 ⑦)는 미확정이라 설정값이다. 다른 사람의 기록을 지우는 외부 엔드포인트는 없고, 삭제 요청의 집행은 사람 승인 뒤 운영자가 CLI로만 한다(회원 본인의 탈퇴 `POST /api/shop/me/withdraw`만 비밀번호 확인 뒤 같은 계정 삭제를 쓴다).
 
 | 환경변수 | 기본값 | 뜻 |
 | --- | --- | --- |
@@ -143,10 +147,11 @@ CLI(`SHOP_DB_PATH`가 가리키는 파일 DB에서 실행, 기본은 dry-run):
 python -m ax_shop_api.retention run [--apply]
 python -m ax_shop_api.retention purge-buyer <buyer_id> [--apply] [--include-retained]
 ```
-- `run`: 만료분 정리. `--apply`가 없으면 건수만 센다.
+- `run`: 만료분 정리. `--apply`가 없으면 건수만 센다. `--apply`면 만료된 로그인 토큰(`sessions.expires_at`이 지난 것)도 지운다(건수에는 넣지 않는다).
 - `purge-buyer`: **정보주체 삭제 요청의 집행부.** AI의 1차 본인 확인과 사람의 최종 판단이 끝난 뒤에만 운영자가 쓴다.
   - 기본: 법정 보존 대상(주문·품목·결제·환불·반품·쿠폰, 5년)을 **남기고**, 그 구매자 관련 **발송 완료 outbox 이벤트**(페이로드의 `buyer_id` 또는 그 구매자 주문 번호로 찾음)와, 남은 주문·쿠폰이 없을 때의 구매자 행만 지운다. 발송 안 된 이벤트는 남긴다.
   - `--include-retained`: 그 구매자의 주문·품목·결제·환불·반품·쿠폰까지 지운다(프로젝트 종료 또는 법적 보존 비적용이 확정됐을 때만).
+  - 어느 쪽이든 **계정 쪽 기록은 늘 지운다**: 후기·로그인 토큰·계정을 지우고, 구매자 행이 남더라도 연령대·성별·직업군을 비우고 `change_seq`를 올린다(고객 내보내기에 다시 나온다). 건수는 `reviews`·`sessions`·`accounts` 키로 따로 보인다(일별 집계는 남기지 않는다).
   - 시드 구매자는 거부(종료 코드 2), 없는 구매자는 종료 코드 1.
 - 종료 코드 2: `:memory:` DB에서는 실행하지 않는다.
 ## 4-2. 토스페이먼츠 테스트 결제 (`toss.py`)

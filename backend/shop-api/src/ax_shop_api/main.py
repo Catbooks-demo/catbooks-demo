@@ -209,6 +209,12 @@ class LoginIn(BaseModel):
     password: str = Field(max_length=1024)
 
 
+class WithdrawIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    password: str = Field(max_length=1024)
+
+
 class DemoLoginIn(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -684,6 +690,23 @@ def _buyer(request: Request, claimed: str | None = None) -> str:
     return claimed
 
 
+TRUST_PROXY_ENV = "SHOP_TRUST_PROXY"
+
+
+def _client_ip(request: Request) -> str:
+    """시도 제한 키. 기본은 연결한 주소만 쓴다.
+
+    앞단 nginx(게이트웨이)를 거치면 모든 손님이 게이트웨이 주소로 보여 제한이 한 사람처럼 묶인다.
+    `SHOP_TRUST_PROXY=on`이면 `X-Forwarded-For`의 마지막 값(게이트웨이가 붙인 손님 주소)을 쓴다.
+    판매 서버 포트가 밖에 바로 열려 있으면 헤더를 꾸밀 수 있으니 게이트웨이 뒤에서만 켠다.
+    """
+    if (os.getenv(TRUST_PROXY_ENV) or "").strip().lower() in {"on", "1", "true"}:
+        last = (request.headers.get("x-forwarded-for") or "").split(",")[-1].strip()
+        if last:
+            return last
+    return request.client.host if request.client else "unknown"
+
+
 def _session_buyer(request: Request) -> tuple[str, str]:
     """`/me` 경로: 구매자 로그인 토큰만 받는다. `(구매자 ID, 토큰)`."""
     token = _bearer(request.headers.get("authorization"))
@@ -811,6 +834,10 @@ def create_app(
     app.state.accounts = account_service
     inquiry_limiter = inquiries.InquiryRateLimiter()
     app.state.inquiry_limiter = inquiry_limiter
+    login_email_limiter = accounts.KeyedRateLimiter(*accounts.LOGIN_PER_EMAIL)
+    login_ip_limiter = accounts.KeyedRateLimiter(*accounts.LOGIN_PER_IP)
+    signup_ip_limiter = accounts.KeyedRateLimiter(*accounts.SIGNUP_PER_IP)
+    password_check_limiter = accounts.KeyedRateLimiter(*accounts.PASSWORD_CHECK_PER_BUYER)
     feedback_limiter = inquiries.InquiryRateLimiter()  # 문의 접수와 한도를 따로 센다
     idea_limiter = inquiries.InquiryRateLimiter()  # 아이디어도 문의와 따로 센다
 
@@ -868,8 +895,23 @@ def create_app(
     async def change_my_password(body: PasswordIn, request: Request) -> dict:
         """현재 비밀번호가 맞으면 바꾸고, 이 토큰을 뺀 다른 로그인은 모두 끊는다."""
         buyer_id, token = _session_buyer(request)
-        account_service.change_password(buyer_id, body.current, body.new, keep_token=token)
+        password_check_limiter.hit(buyer_id)  # 비밀번호 확인은 탈퇴와 한도를 같이 센다
+        await asyncio.to_thread(
+            account_service.change_password, buyer_id, body.current, body.new, keep_token=token
+        )
         return _ok({"changed": True})
+
+    @app.post("/api/shop/me/withdraw")
+    async def withdraw_me(body: WithdrawIn, request: Request) -> dict:
+        """회원 탈퇴(구매자 로그인 토큰 + 비밀번호, 틀리면 403 `INVALID_PASSWORD`).
+
+        계정·후기·로그인 토큰을 지우고 연령대·성별·직업군을 비운다. 주문·클레임 기록은 법정
+        보존 기간(5년) 남는다.
+        """
+        buyer_id, _token = _session_buyer(request)
+        password_check_limiter.hit(buyer_id)
+        await asyncio.to_thread(account_service.withdraw, buyer_id, body.password)
+        return _ok({"withdrawn": True})
 
     @app.post("/api/shop/products/{product_id}/reviews", status_code=201)
     async def post_review(product_id: str, body: ReviewIn, request: Request) -> dict:
@@ -899,8 +941,10 @@ def create_app(
         return _ok(await asyncio.to_thread(review_service.reviewable, _buyer(request)))
 
     @app.post("/api/shop/auth/signup", status_code=201)
-    async def auth_signup(body: SignupIn) -> dict:
-        token, user = account_service.signup(
+    async def auth_signup(body: SignupIn, request: Request) -> dict:
+        signup_ip_limiter.hit(_client_ip(request))
+        token, user = await asyncio.to_thread(
+            account_service.signup,
             body.email,
             body.password,
             body.display_name,
@@ -911,8 +955,10 @@ def create_app(
         return _ok({"token": token, "user": user})
 
     @app.post("/api/shop/auth/login")
-    async def auth_login(body: LoginIn) -> dict:
-        token, user = account_service.login(body.email, body.password)
+    async def auth_login(body: LoginIn, request: Request) -> dict:
+        login_ip_limiter.hit(_client_ip(request))
+        login_email_limiter.hit(body.email.strip().lower())
+        token, user = await asyncio.to_thread(account_service.login, body.email, body.password)
         return _ok({"token": token, "user": user})
 
     @app.post("/api/shop/auth/logout")
@@ -926,6 +972,13 @@ def create_app(
     @app.get("/api/shop/auth/config")
     async def auth_config() -> dict:
         return _ok({"demo_login": accounts.demo_login_enabled()})
+
+    @app.get("/api/shop/auth/demo-buyers")
+    async def auth_demo_buyers() -> dict:
+        """`SHOP_DEMO_LOGIN=on`일 때만 열린다. 계정이 없는 옛 데모 구매자 목록(로그인 없이)."""
+        if not accounts.demo_login_enabled():
+            raise ShopError("NOT_FOUND", "없는 경로다", 404)
+        return _ok(account_service.demo_buyers())
 
     @app.post("/api/shop/auth/demo-login")
     async def auth_demo_login(body: DemoLoginIn) -> dict:
@@ -979,7 +1032,7 @@ def create_app(
     def list_products(
         seller_id: str | None = None,
         category_code: str | None = None,
-        q: str | None = None,
+        q: str | None = Query(default=None, max_length=100),
         genre: str | None = None,
         sort: Literal["popular", "new", "price_asc", "price_desc"] | None = None,
         page: int | None = Query(default=None, ge=1),

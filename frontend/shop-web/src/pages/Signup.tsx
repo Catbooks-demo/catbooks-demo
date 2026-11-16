@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { Link, useRouter } from "@/lib/nav";
 import { ErrorNote, PageTitle } from "@/components/shop/bits";
+import { authErrorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { AGE_BANDS, GENDERS, OCCUPATIONS, type AgeBand, type Gender, type Occupation, type SignupInput } from "@/lib/types";
 
@@ -36,7 +37,7 @@ export default function SignupPage() {
       await signup(input);
       router.push("/");
     } catch (err) {
-      setError((err as Error).message);
+      setError(authErrorMessage(err));
       setBusy(false);
     }
   }

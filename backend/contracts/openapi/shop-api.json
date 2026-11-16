@@ -1603,6 +1603,21 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "WithdrawIn": {
+        "additionalProperties": false,
+        "properties": {
+          "password": {
+            "maxLength": 1024,
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "password"
+        ],
+        "title": "WithdrawIn",
+        "type": "object"
       }
     }
   },
@@ -3918,6 +3933,27 @@
         "summary": "Auth Config"
       }
     },
+    "/api/shop/auth/demo-buyers": {
+      "get": {
+        "description": "`SHOP_DEMO_LOGIN=on`일 때만 열린다. 계정이 없는 옛 데모 구매자 목록(로그인 없이).",
+        "operationId": "auth_demo_buyers_api_shop_auth_demo_buyers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Auth Demo Buyers Api Shop Auth Demo Buyers Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Auth Demo Buyers"
+      }
+    },
     "/api/shop/auth/demo-login": {
       "post": {
         "description": "`SHOP_DEMO_LOGIN=on`일 때만 열린다(옛 데모 구매자에게 비밀번호 없이 세션을 준다).",
@@ -5251,6 +5287,47 @@
         "summary": "My Reviews"
       }
     },
+    "/api/shop/me/withdraw": {
+      "post": {
+        "description": "회원 탈퇴(구매자 로그인 토큰 + 비밀번호, 틀리면 403 `INVALID_PASSWORD`).\n\n계정·후기·로그인 토큰을 지우고 연령대·성별·직업군을 비운다. 주문·클레임 기록은 법정\n보존 기간(5년) 남는다.",
+        "operationId": "withdraw_me_api_shop_me_withdraw_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithdrawIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Withdraw Me Api Shop Me Withdraw Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Withdraw Me"
+      }
+    },
     "/api/shop/metric-series": {
       "get": {
         "operationId": "metric_series_api_shop_metric_series_get",
@@ -5956,6 +6033,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maxLength": 100,
                   "type": "string"
                 },
                 {
