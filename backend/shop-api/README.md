@@ -1,0 +1,192 @@
+# shop-api
+담당: 재헌 · 포트: 8010
+## 1. 역할
+판매 사이트 서버(LLM 없음, 코드만). 도서·문구 오픈마켓의 상품·주문·가짜 결제 데이터의 원천이고, 모든 사건의 출발점인 이벤트를 발행한다.
+- PR 1: 상품 관리, 주문(장바구니 없이 바로), 가짜 결제(성공·실패 응답), 시드 데이터, 주문·결제 이벤트 4종 발행.
+- PR 2: 장애 주입·해제(SHOP-06)와 `shop.degraded`·`shop.recovered` 직접 측정.
+- PR 3: 공지 배너 API(SHOP-08)와 쿠폰 발급 API(SHOP-10).
+- 이후 PR: data용 조회 API(SHOP-11). 환불 API(SHOP-12)와 2차 이벤트(배송·반품·환불)는 2차다.
+## 2. 실행 방법
+- 서버: `docker compose -f infra/compose.yml up shop-api`, 또는 `uv run uvicorn ax_shop_api.main:app --port 8010`
+- 목 모드: `SHOP_MOCK=1` (CI는 항상 1). 저장소는 SQLite이며 `SHOP_DB_PATH`로 파일을 정한다(기본 `:memory:`). 비어 있으면 시드를 넣는다.
+- 단독 테스트: `uv run pytest shop-api`
+## 3. 입출력 계약
+- 경로 `/api/shop/<복수 명사>`, 성공 `{data, meta}`, 실패 `{error: {code, message}}`. 금액은 정수 원, 시간은 UTC.
+
+| 메서드·경로 | 내용 |
+| --- | --- |
+| `GET /api/shop/products?q&genre&sort&page&size` | 쿼리가 없으면 지금처럼 활성 상품 **전체 배열**(AXcellent가 이렇게 읽는다). `q`는 이름·저자·출판사 부분 일치(대소문자 무시, 100자까지), `genre`는 `genre_code`로 거르고, `sort`는 `popular`(최근 30일 결제 수량, 기본)·`new`·`price_asc`·`price_desc`. `page`(1부터)를 주면 `size`(1~60, 기본 24)개씩 자르고 `meta`에 `total`·`page`·`size`를 싣는다 |
+| `GET /api/shop/genres` | `[{genre_code, name, product_count}]`, `GENRES` 순서, 판매 중 상품 수(토큰 없음) |
+| `GET /api/shop/products/best?genre&days=30&limit=10` | 토큰 없는 공개 베스트. 최근 `days`(1~93)일 **결제된 주문**의 수량 순 상품과 `sold_qty`(`limit` 1~50). `(genre, days, limit)`별로 `SHOP_BEST_CACHE_S`초 프로세스 안에 캐시(수량 묶음을 `(days, genre)`별로 캐시). 인기순·베스트는 환불 안 뺀 **결제 수량**(전액 환불 주문도 안 뺌)을 세므로 `sales-summary`의 `net_qty`와 다르다. 모르는 `genre`는 422 |
+| `GET /api/shop/sellers`, `GET /api/shop/products[?seller_id&category_code]`, `GET /api/shop/products/{id}` | 판매자·상품 조회. 상품에 `description`(소개, 최대 4000자, 모르면 `null`)과 `isbn13`·`author`·`publisher`(책 정보)·`genre_code`(장르 코드, 모르면 `null`)가 있다 |
+| `POST /api/shop/products`, `PATCH /api/shop/products/{id}` | 상품 등록·수정(판매 중지는 `active=false`). 선택 **장르** `genre_code`(`ax_shop_api/genres.py`의 `GENRES` 16개 코드 중 하나, 아니면 422, 빈 글·`null`은 모름·지움이고 PATCH에서 칸을 안 보내면 그대로)와 선택 **소개** `description`(4000자까지, 앞뒤 공백은 지움)과 선택 **책 정보** `isbn13`·`author`·`publisher`를 받는다: `isbn13`은 하이픈·공백을 뺀 13자리 숫자이고 `978`·`979`로 시작하며 확인 숫자가 맞아야 한다(아니면 422, 하이픈은 지우고 저장), `author`·`publisher`는 100자까지(앞뒤 공백은 지운다). 빈 글·`null`은 "모른다"이고 `PATCH`에서는 지운다(칸을 안 보내면 그대로). 판매자 입점(`POST /api/shop/sellers`)의 첫 상품도 같은 칸을 받는다. 시드 상품에는 넣지 않았다(값을 지어내지 않는다). 쓰기 권한은 기존과 같다(`admin` 등 상품 쓰기 토큰) |
+| `GET /api/shop/users`, `GET /api/shop/users/{buyer_id}`, `POST /api/shop/sessions` | 쇼핑몰 화면용 구매자. 목록은 `admin` 토큰만, 한 명 조회는 본인(로그인 토큰) 또는 `admin`만이다(아래 3-1). `sessions`는 `SHOP_DEMO_LOGIN=on`일 때만 `{buyer_id}`를 받아 비밀번호 없는 데모 로그인 `{user, token}`을 주고, 꺼져 있으면 404다(`SHOP_BUYER_AUTH=legacy`에서는 옛 동작대로 토큰 없이 `{user}`만 준다). 한 명 조회·`sessions`의 사용자에는 `age_band`(연령대 구간 `10s`·`20s`·`30s`·`40s`·`50s_plus`, 모르면 `null`)와 `gender`(성별 코드 `female`·`male`·`no_answer`, 모르면 `null`)가 있고, 전체 목록에는 싣지 않는다 |
+| `PATCH /api/shop/users/{buyer_id}` | 구매자 연령대 구간·성별 코드를 정한다. **보낸 칸만 바꾸고**(안 보낸 칸은 그대로) 본문 `{age_band, gender}` 중 하나는 있어야 한다(없으면 422). `gender`는 `female`·`male`·`no_answer` 중 하나이거나 `null`(지움)이고 직업·생년월일은 받지 않는다. 아래 `age_band`는 `10s`·`20s`·`30s`·`40s`·`50s_plus` 중 하나이거나 `null`(지움)이고 칸이 없거나 다른 값·다른 키는 422다. 생년월일·나이는 받지 않고 구간만 저장한다(개인정보 부담을 줄인다). 없는 구매자는 404 `BUYER_NOT_FOUND`. 본인(로그인 토큰) 또는 `admin` 토큰만 바꿀 수 있고(`GET`으로 읽는 것도 같다, 아래 3-1) 바꾸면 `buyers.updated_at`을 적는다. 값이 들어오기 전의 구매자는 `age_band`가 `null`이고 채워 넣지 않는다 |
+| `GET /api/shop/categories` | 판매 중 상품의 카테고리(`category_code`·`name`·`product_count`). 표시 이름을 모르는 코드는 `name`이 null |
+| `POST /api/shop/cart/price` | 장바구니 가격 미리보기(저장·재고 차감 없음). `items`, 선택 `points_used`, 선택 `coupon_id`·`coupon_units`(기본 1)·`buyer_id`. 상품 합계 → 배송비(5만 원 미만 3,000원) → 쿠폰 → 적립금 순서. 쿠폰은 `coupon_id`와 `buyer_id`가 함께 있을 때만 검증해 `coupon_discount`를 계산하고(없으면 0, `buyer_id` 없이 쿠폰만 주면 400 `BUYER_REQUIRED`) 장수는 차감하지 않는다. `payable_amount`는 `POST /orders`의 `total_amount`와 같다 |
+| `POST /api/shop/orders` | 주문. 가격·총액은 DB 값으로 계산하고 재고를 차감한다. 선택 `points_used`(원, 품목 합계 이하)를 받는다. 선택 `coupon_id`와 `coupon_units`(기본 1)로 **본인의 쿠폰 한 건**을 쓴다(`campaign`·`compensation` 모두). 할인은 `min(장수×unit_value, 상품 합계)`로 배송비는 할인하지 않고, 적립금은 쿠폰을 뺀 상품 금액을 넘을 수 없다. 다른 구매자의 쿠폰은 403 `COUPON_NOT_YOURS`, 없는 쿠폰은 404 `COUPON_NOT_FOUND`, 만료는 409 `COUPON_EXPIRED`, 남은 장수 초과는 409 `COUPON_UNITS_EXCEEDED`다. 응답에 `coupon_id`·`coupon_units`·`coupon_discount`, 품목에 `coupon_share`(할인을 품목 금액 비율로 나눈 몫)가 있고 `paid_amount` = 단가×수량 − `points_share` − `coupon_share`다. 선택 `idempotency_key`(1~128자)를 주면 같은 구매자의 같은 키는 주문 하나다: 다시 오면 재고와 쿠폰 장수를 건드리지 않고 처음 주문을 200으로 돌려주고(`meta.replayed: true`, 새로 만들면 201), 상품·수량·포인트·쿠폰이 다르면 409 `IDEMPOTENCY_MISMATCH`다. 키는 주문 한 건당 하나를 만들어 재시도에만 다시 보낸다(매번 새 키를 보내면 보호가 안 되고, 새 주문에 같은 키를 쓰면 처음 주문이 돌아온다). 키가 없으면 매번 새 주문이다. `total_amount` = 품목 합계 − 포인트 + `shipping_fee`(품목 합계 5만 원 미만 3,000원, 이상 0원)로 **실제 결제(현금) 금액**이고 결제 `amount`와 같다 |
+| `GET /api/shop/orders[?buyer_id&since&until&limit&cursor]`, `GET /api/shop/orders/{id}` | 주문 조회. 목록은 order_id 순 **한 페이지**다: `limit` 기본 200(최대 1000, 넘으면 422), `buyer_id`가 있어도 같다. `meta.next_cursor`(마지막 페이지면 `null`)를 다음 요청의 `cursor`로 주면 이어서 나온다. 기간 안 전체가 필요하면 `since`·`until`과 함께 cursor로 끝까지 넘긴다(25만 건을 한 번에 읽다 서버가 멈춘 일, 2026-11-10). 품목·결제·환불은 페이지 안 주문을 묶어 한 번에 읽고, DB 읽기는 이벤트 루프 밖(스레드)에서 한다. 주문 필드 `shipping_fee`·`points_used`·`delivered_at`(배송 전 null), 품목 필드 `order_item_id`(`oit_`)·`title`(주문 당시 이름)·`points_share`(포인트를 품목 금액 비율로 나눈 몫, 남는 1원 단위는 뒤 품목부터)·`paid_amount`(= 단가×수량 − `points_share`), 결제 필드 `created_at`. 항상 `total_amount` = Σ`paid_amount` + `shipping_fee`. 환불 기록 목록 `refunds`(`refund_id`·`payment_id`·`amount`·`created_at`, `created_at` 오름차순, 없으면 `[]`)가 `refunded_amount`(합계)와 함께 온다 — 환불을 실제 환불 시각으로 잡는 근거 |
+| `POST /api/shop/orders/{id}/payments` | 가짜 결제. `simulate`: `success`·`failure`. `pending_payment`·`payment_failed` 주문만 결제할 수 있고(그 밖은 409 `ORDER_NOT_PAYABLE`), 실패한 주문을 다시 부르면 새 결제 기록이 쌓이며 성공하면 `paid`가 된다. 상태 확인·결제 기록·상태 변경은 한 트랜잭션이라 동시에 들어와도 성공 결제는 1건이고 나머지는 `ORDER_NOT_PAYABLE`이다. 실패 코드(`PG_UNAVAILABLE` 서버 문제 / `PG_DECLINED` 거절)는 응답의 `payments[].failure_code`와 `payment.failed` 이벤트 `failure_code`에 그대로 담긴다 |
+| `GET /api/shop/payment-config` | 화면이 결제 방식을 고르는 값 `{provider: "fake" \| "toss_test"}`. 키는 담지 않는다(아래 4-2) |
+| `POST /api/shop/orders/{id}/payments/toss/prepare` | 토스 테스트 결제 시도 만들기 → `{toss_order_id, amount, order_name}`. `pending_payment`·`payment_failed` 주문만(그 밖 409 `ORDER_NOT_PAYABLE`), 금액은 DB 주문 합계(배송비 포함, 요청 값 없음). `toss_order_id` = `{order_id}-a{시도 번호}`로 시도마다 새로, `order_name`은 "첫 상품명 외 N건". 가짜 결제 모드면 409 `TOSS_DISABLED` |
+| `POST /api/shop/payments/toss/confirm` | 토스 승인. 본문 `{toss_order_id, payment_key, amount}`(결제위젯 성공 리다이렉트 값). 없는 시도 404 `PAYMENT_ATTEMPT_NOT_FOUND`, 금액이 시도 금액과 다르면 400 `AMOUNT_MISMATCH`(토스 호출 안 함). 이미 끝난 시도는 처음 결과를 200으로 돌려준다(`meta.replayed: true`, 토스에 다시 보내지 않음). 응답 `data`는 주문(`GET /orders/{id}`와 같은 모양). 가짜 결제 모드면 409 `TOSS_DISABLED` |
+| `POST /api/shop/admin/orders/{id}/shipped` | 발송 시각 기록(시연·시드용). `admin` 토큰만, 결제된 주문만(409 `ORDER_NOT_PAID`), 본문 `shipped_at`(시간대 있는 시각, 비우면 지금), 이미 있으면 처음 값을 유지한다. 이미 도착한 주문이면 도착 시각보다 늦을 수 없다(409 `INVALID_TIME`). 주문 상태는 바꾸지 않고 이벤트도 내지 않는다. 주문 응답에는 `shipped_at`과 **약속 배송일 `promised_delivery_at`**(결제 성공 시각 + 3일, 결제 전·옛 주문은 null)이 있다 — 고객지원이 '약속한 날보다 늦었나'를 코드로 판정하는 근거 |
+| `POST /api/shop/admin/orders/{id}/delivered` | 배송 완료 시각 기록(시연·시드용). `admin` 토큰만, 결제된 주문만(409 `ORDER_NOT_PAID`), 본문 `delivered_at`(시간대 있는 시각, 비우면 지금), 이미 있으면 처음 값을 유지한다. 주문 상태는 바꾸지 않고 `order.delivered` 이벤트도 내지 않는다 |
+| `POST /api/shop/claims` | 고객 반품·환불 신청(토큰 없음, 주문 구매자만). 고객지원 `create_claim`을 A2A로 부른다(요청자 `shop-api`, 사건 ID `ctx_shop_<hex>`). 금액은 받지 않고, 사유 문장 `description`은 `untrusted`로만 넘긴다. 응답 `data`는 고객지원의 클레임이고 `meta.context_id`가 사건 ID다. 구매자가 다르면 403 `BUYER_MISMATCH`, 고객지원 거부·타임아웃·오류는 403·504·502 |
+| `POST /api/shop/inquiries` | 고객 문의 접수(구매자 로그인 토큰 필요, #385 B안). 요청 `{buyer_id, order_id, subject?, body, images?}`로 `order_id`는 필수이고 그 구매자의 주문이어야 한다(없는 주문과 남의 주문은 같은 404 `ORDER_NOT_FOUND`). **고객지원을 부르지 않고 이 서버의 문의함(`inquiry_inbox`, `inbox.py`)에 저장한다**(예진 님 제안: 저장 → AXcellent가 읽어 오기). 고객지원이 정해진 간격으로 `GET /api/shop/admin/inquiries`로 읽어 가 처리하고 `POST /api/shop/admin/inquiries/{seq}/synced`로 읽었다고 알린다. 멱등 키 대신 접수 지문(`digest`)이 같은 접수는 한 건이다. 지문은 구매자·주문·제목·본문과 시간 구간 번호(`floor(epoch/창)`)의 해시로 만들어, 같은 구간(`SHOP_INQUIRY_DEDUP_WINDOW_SEC`, 기본 600초, 0 이하·잘못된 값이면 기본값)의 같은 접수는 한 번만 처리되고 창이 지나면 새 문의가 된다(구간 경계에서 연타하면 키가 둘로 갈릴 수 있으나 수용). 원문은 로그·키에 남기지 않는다. `images`(선택)는 영수증 사진 `[{ref, media_type(jpeg·png·webp), data_base64}]`로 최대 4장·한 장 base64 6,000,000자(약 4.5MB)·합계 12,000,000자이고, base64가 아니면 400 `INVALID_IMAGE`, 5장 이상은 400 `TOO_MANY_IMAGES`, 한 장이 한도를 넘으면 413 `IMAGE_TOO_LARGE`, 합계 초과는 413 `IMAGES_TOO_LARGE`이다(둘 다 우리 오류 모양이고 사진 값은 싣지 않는다). 형식이 틀린 요청의 422는 `detail`에서 요청이 보낸 값(`input`)을 뺀다. 사진은 문의함에 읽어 갈 때까지만 보관하고(읽어 가면 지운다) 로그에는 남기지 않으며, 같은 글에 사진이 다르면 지문도 달라진다. 응답 `data`는 `{id, status, order_id, updated_at}`뿐이고 `id`는 이 서버의 접수 번호(고객용 목록·상세·평가도 이 번호로 열고, 고객지원이 읽어 간 문의는 이 서버가 고객지원 문의 번호로 바꿔 부르며, 아직 읽어 가지 않은 문의는 접수한 내용만 보여 준다), `status`는 `open`, `meta.context_id`가 사건 ID다. 형식·빈 본문·길이 초과 400, 속도 제한 429 `RATE_LIMITED`(`SHOP_INQUIRY_RATE_PER_BUYER` 기본 5/분, `SHOP_INQUIRY_RATE_GLOBAL` 기본 60/분, 본문 `SHOP_INQUIRY_MAX_BODY` 2000자, 제목 `SHOP_INQUIRY_MAX_SUBJECT` 100자), 접수는 고객지원이 꺼져 있어도 된다. 주문·결제는 읽기만 한다 |
+| `GET /api/shop/admin/inquiries?limit=` | 문의함에서 아직 읽어 가지 않은 문의를 접수 순서로(`seq`·`context_id`·`buyer_id`·`age_band`(구매자 연령대 구간, 모르면 `null`)·`customer_name`·`order_id`·`subject`·`message`·`images`·`created_at`), `meta.total`은 남은 전체 수. 요청자는 `support`·`admin` 토큰만(그 밖은 403, 토큰 없으면 401). 문의 원문과 사진이 들어 있다 |
+| `POST /api/shop/admin/inquiries/{seq}/synced` | 고객지원이 이 문의를 처리했다고 표시한다. 요청 `{support_inquiry_id}`(1 이상, 그 밖의 키는 422). 사진을 지우고 이미 표시했으면 처음 결과를 그대로 돌려준다. 없는 번호는 404 `INQUIRY_NOT_FOUND`. 요청자는 `support`·`admin`만 |
+| `POST /api/shop/admin/inquiries/{seq}/failed` | 읽어 간 쪽이 이 문의를 처리하지 못했다고 알린다. 요청 `{reason}`(짧은 코드 1~40자, 그 밖의 키는 422). 실패할 때마다 다시 읽는 시각을 늦추고(1분부터 두 배, 최대 30분) `SHOP_INBOX_MAX_ATTEMPTS`(기본 6)번째 실패에서 실패로 빼 둔다(`GET /admin/inquiries` 응답 `meta.failed`에 센다). 그래서 계속 실패하는 접수가 문의함 앞을 막지 않는다. 이미 처리된 문의는 그대로 두고 없는 번호는 404. 요청자는 `support`·`admin`만 |
+| `GET /api/shop/claims?buyer_id=&order_id=` | 내 클레임(취소·반품·교환) 신청과 AXcellent가 적어 준 결과(토큰 없음, 읽기). 최근 순, 결과가 오기 전에는 `status=received`·`result=null`. `order_id`로 좁힐 수 있다 |
+| `GET /api/shop/admin/claims?state=new|open` | `new`(기본): 읽을 차례가 된 신청(`seq`·`key`·구매자·`age_band`(구매자 연령대 구간, 모르면 `null`)·주문·종류·사유·품목·설명·`attempts`…), `meta.total`·`meta.failed`. `open`: 읽어 갔지만 끝나지 않은 신청(`seq`·`support_claim_id`·`status`·`result_digest`)을 `after`(접수 번호)·`limit`으로 쪽 나눠 주고 `meta.next_after`로 이어 읽는다. 반려된 신청도 일주일은 포함한다. 요청자는 `support`·`admin`만 |
+| `POST /api/shop/admin/claims/{seq}/result` | 고객지원이 판정한 결과를 적는다. 요청 `{support_claim_id?, status, result}`. 클레임으로 받지 않았으면 번호 없이 `status=not_accepted`와 이유만. 같은 값이면 그대로, 다른 클레임 번호가 이미 적혀 있으면 409 `CLAIM_MISMATCH`, 없는 번호는 404 |
+| `POST /api/shop/admin/claims/{seq}/failed` | 문의함과 같다. 상한에 닿으면 고객에게는 `not_accepted`(접수를 처리하지 못했다)로 닫는다 |
+| `GET /api/shop/admin/intake/stuck` | 실패로 빼 둔 문의·클레임 접수 목록(`kind`·`seq`·`reason`·`attempts`·`failed_at`·`created_at`). 고객이 쓴 글은 싣지 않는다. 요청자는 `support`·`admin`만 |
+| `POST /api/shop/admin/inquiries/{seq}/retry` · `POST /api/shop/admin/claims/{seq}/retry` | 실패로 뺀 접수를 다시 읽는 차례로 돌린다(횟수 0). 클레임은 고객 화면에도 다시 `received`로 보인다. 응답 `{seq, requeued}`(실패 상태가 아니었으면 `false`로 그대로 둔다), 없는 번호는 404. 요청자는 `support`·`admin`만 |
+| `GET /api/shop/inquiries?buyer_id=&limit=` | 내 문의 목록(구매자 로그인 토큰 필요, 읽기). **이 서버가 저장한 값만 읽는다(고객지원을 부르지 않는다).** 고객지원이 읽어 간 문의는 되돌려 쓴 값(`POST /admin/inquiries/{seq}/view`)을, 아직 안 읽은 문의는 접수한 내용(제목·본문 앞 80자)을 보여 준다(읽어 간 뒤에는 본문 사본을 지우므로 되돌려 쓰기 전에는 제목만 보인다). 여러 번 처리하지 못해 따로 빼 둔 접수는 `intake_failed`·`notice`로 접수 실패를 알린다. 고객용 키(`id`·`subject`·`status`·`order_id`·`updated_at`·`rated`·`preview`)만 남기고 `can_rate`(해결됐고 아직 평가 안 함)를 붙인다. 평가를 남겼으면 읽어 가기 전이라도 `rated`다. 최근 순, `limit` 1~100(기본 50), `meta.total`은 전체 수. 구매자 ID 형식 400 |
+| `GET /api/shop/inquiries/{inquiry_id}?buyer_id=` | 내 문의 하나와 주고받은 메시지(`id`·`role`·`text`·`created_at`). 같은 방식으로 저장값만 읽는다. 남의 문의와 없는 문의는 같은 404 `NOT_FOUND`. 문의 번호는 1 이상 정수 |
+| `POST /api/shop/inquiries/{inquiry_id}/feedback` | 해결된 문의의 고객 평가(구매자 로그인 토큰 필요). 요청 `{buyer_id, rating(1~5), resolved, comment?(300자)}`(그 밖의 키는 422). **저장만 하고(고객지원을 부르지 않는다)** AXcellent가 읽어 가 `submit_feedback`으로 후기로 남긴다. 되돌려 쓴 문의 값이 해결(`resolved`)이고 아직 평가 안 했을 때만 받는다: 남의 문의와 없는 문의는 같은 404 `NOT_FOUND`, 읽어 가기 전·해결 전·이미 남김은 409 `INVALID_STATE`. 응답 `data`는 `{inquiry_id, rated, rating}`뿐이다. 구매자 ID 형식 400, 속도 제한 429 `RATE_LIMITED`(문의 접수와 따로 같은 환경변수 기준) |
+| `POST /api/shop/ideas` | 고객 아이디어(토큰 없음). 요청 `{buyer_id, kind, text(500자)}`. **저장만 한다.** AXcellent가 읽어 가 `submit_idea`로 분류·저장하고, 환불류·광고·너무 짧은 글은 받지 않고 결과 코드만 남긴다(고객에게는 접수됨만 보인다). 같은 구매자·종류·글은 한 건. 읽어 간 뒤에는 글 원문 사본을 지우고 앞부분 30자만 남긴다. 응답 `{idea_id(접수 번호), received: true}`. 속도 제한 429 |
+| `GET /api/shop/ideas?buyer_id=&limit=` | 내 아이디어 내역(토큰 없음, 읽기). 접수 번호·종류·앞부분·`status`(`pending` 처리 전, `received`, `redirected` 문의로 가야 함, `not_accepted`)·고객지원이 되돌려 쓴 안내 한 줄(`notice`). 구매자 ID 형식 400 |
+| `POST /api/shop/admin/claims/{claim_id}/return-received` | 반품 입고(`admin` 토큰만). **이 서버에 `ret_` 번호로 기록하고 `return.received`를 발행할 뿐 고객지원을 부르지 않는다.** AXcellent가 읽어 가 `receive_return`으로 클레임을 입고 처리한다. 같은 클레임을 다시 부르면 이전 기록을 돌려준다. 없는 주문·모르는 클레임은 404, 신청의 주문과 다르면 409 `ORDER_MISMATCH`, 아직 입고 단계(`awaiting_return`)가 아니면 409 `INVALID_STATE`이고 이 경우 기록도 이벤트도 없다(이 서버의 클레임 신청 기록으로 확인한다) |
+| `GET /api/shop/admin/inquiries/open?after&limit` | 읽어 갔지만 고객이 보는 값이 아직 끝나지 않은 문의(`seq`·`support_inquiry_id`·`view_digest`)를 쪽 나눠 준다(`meta.next_after`). 해결되고 평가까지 끝난 문의, 해결된 지 `SHOP_VIEW_RESOLVED_DAYS`(기본 7)일이 지난 문의는 뺀다. `sweep=true`면 이 조건을 무시하고 고객 화면에 남은 문의를 모두 준다(고객지원이 가끔 한 번 훑어 늦은 개인정보 삭제를 놓치지 않는다). `support`·`admin`만 |
+| `POST /api/shop/admin/inquiries/{seq}/view` | 고객지원이 정한 고객용 문의 값을 되돌려 쓴다. 요청 `{view, view_digest}`. 허용한 키(`CUSTOMER_FIELDS`·메시지 네 칸)만 남기고 같은 지문이면 그대로 둔다. `support`·`admin`만, 없는 번호 404 |
+| `POST /api/shop/admin/inquiries/{seq}/gone` | 고객지원에서 찾을 수 없는 문의(개인정보 삭제·고객지원 재시작)를 고객 화면에서 빼고 되돌려 쓴 값을 지운다. 이미 뺀 문의는 그대로, 없는 번호는 404. `support`·`admin`만 |
+| `POST /api/shop/admin/inquiries/by-support/{support_inquiry_id}/gone` | 위와 같은데 고객지원 문의 번호로 부른다. 고객지원이 문의를 지우는 그 자리에서 알려 고객 화면에서 빼고 되돌려 쓴 값·원문 사본을 지운다(못 알리면 읽어 가기가 다음 주기에 이어서 한다). 이미 뺀 문의도 200, 읽어 간 적 없는 번호는 404. `support`·`admin`만 |
+| `GET /api/shop/admin/ideas?limit` · `POST /api/shop/admin/ideas/{seq}/synced` | 아이디어함 읽기(접수 순서, 항목에 `age_band`(구매자 연령대 구간, 모르면 `null`), `meta.total`)와 처리 표시. 표시 요청 `{outcome(짧은 코드), ref?, notice?(120자)}`. 이미 표시한 건 바뀌지 않는다. `support`·`admin`만 |
+| `GET /api/shop/admin/feedback?limit` · `POST /api/shop/admin/inquiries/{seq}/feedback-synced` | 읽어 가지 않은 평가 읽기와 처리 표시(`{outcome}`). 평가 글(`comment`)은 읽는 쪽이 `untrusted`로만 다룬다. 고객지원이 받지 않은 평가(`rated`·`already_rated`가 아닌 결과)는 지워서 고객이 다시 남길 수 있다. `support`·`admin`만 |
+| `GET /api/shop/admin/returns?limit` · `POST /api/shop/admin/returns/{claim_id}/synced` | 기록된 반품 입고 읽기(입고 순서, `meta.total`)와 처리 표시(`{outcome}`). `support`·`admin`만 |
+| `POST /api/shop/admin/returns/{claim_id}/requeue` | 처리를 포기(`gave_up`)했거나 잘못 닫은 반품 입고의 읽은 표시를 지워 다시 읽는 차례로 돌린다(사람이 확인한 뒤). 입고 기록과 `return.received`는 그대로다. 없는 번호 404. `support`·`admin`만 |
+| `POST /api/shop/payments/{id}/refund` | 현금 환불(SHOP-12, **`support` 토큰만**, 마케팅·재무·관리자 거부). `refund_amount`·`idempotency_key`(`<claim.context_id>:refund_request:claim:<id>`)·선택 `context_id`. 같은 키·같은 내용은 이전 환불을 200으로 돌려주고(`meta.replayed`), 다르면 409, 성공한 결제의 환불 가능 금액을 넘으면 409 `REFUND_EXCEEDS_PAYMENT`. 반영되면 `payment.refunded`를 발행하고 주문 `refunded_amount`가 늘어난다(상태는 `paid` 그대로) |
+| `GET·POST·DELETE /api/shop/admin/faults` | 장애 상태 조회·주입(`kind`: `latency`+`delay_ms`, `failure`)·해제. 주입은 `admin`, 해제는 `admin`·`infra` 토큰만(`Authorization: Bearer`) |
+| `GET·PUT /api/shop/admin/payment-version`, `POST /api/shop/admin/payment-version/rollback` | 결제 설정 버전(잘못된 배포 시연). v1 정상, v2는 결제사 승인이 500대로 실패(토스 테스트 키면 `TossPayments-Test-Code`). 배포(PUT)는 `admin`만, 이전 버전으로 되돌리기(rollback)는 `admin`·`infra`(인프라 롤백), 라이브 키면 v2 거절. 장애 스위치(`active`)가 아니다 |
+| `POST /api/shop/admin/faults` `kind=pg_slow` · `DELETE /api/shop/admin/faults/pg` | 시험용 "결제사 쪽 지연"(`delay_ms` 1~10000). 결제마다 실제로 기다리고 그 지연을 표본에 남긴다. 장애 스위치(`active`)가 아니라 위 해제로는 꺼지지 않는다. 켜기·끄기 모두 `admin`만. 상태는 `pg_delay_ms` |
+| `GET /api/shop/admin/orchestrator/incidents`, `GET /api/shop/admin/orchestrator/incidents/{context_id}` | 관리자 화면(shop-web)용 총괄 사건 읽기 중계(GET만, `admin` 토큰만). 총괄(`SHOP_ORCHESTRATOR_URL`, 기본 `http://127.0.0.1:8000`)의 `/api/incidents`를 그대로 전달한다. 총괄이 꺼져 있으면 502 `UPSTREAM_UNAVAILABLE`, 느리면 504 `UPSTREAM_TIMEOUT`, 사건이 없으면 404, 사건 번호 형식(`ctx_inc_<hex>`)이 아니면 400 `INVALID_CONTEXT_ID`. 쓰기·승인은 하지 않는다 |
+| `GET /api/shop/admin/orchestrator/departments` | 관리자 화면(shop-web)용 부서 카드·사용량 읽기 중계(GET만, `admin` 토큰만). 총괄 `/api/departments`를 그대로 전달하고 `meta`의 `mock`·`window_seconds`·`bucket_seconds`를 함께 돌려준다. 오류 처리는 사건 중계와 같다(총괄이 꺼져 있으면 502, 느리면 504). 총괄 실제 모드는 501을 돌려주므로 `UPSTREAM_ERROR`(502)로 나온다 |
+| `GET /api/shop/banners`, `POST /api/shop/banners`, `DELETE /api/shop/banners/{notice_id}` | 공지 배너. 고객 화면은 토큰 없이 게시 중이고 기간 안인 배너만 읽고, 게시·해제는 `marketing` 토큰만(같은 `notice_id` 재게시는 첫 배너 그대로) |
+| `POST /api/shop/coupons`, `GET /api/shop/coupons[?buyer_id&purpose_code&campaign_id]`, `GET /api/shop/coupons/{id}` | 쿠폰. 발급은 `marketing` 토큰만, `idempotency_key` 필수(같은 키·같은 내용은 이전 쿠폰, 다르면 409), 총액은 서버가 건수×단가로 계산, 조회는 `marketing`·`support`·`finance`·`orchestrator`·`data`(캠페인 성과를 세는 읽기 전용). 발급에 선택 `expires_at`(시간대가 있는 시각, 지금보다 뒤)을 주면 그 시각부터 주문에 쓸 수 없고 없으면 무기한이다. 응답의 `used_units`·`remaining_units`·`expired`는 주문에서 계산한 값이다: 취소됐거나 전액 환불된 주문(`refunds` 합계 = 결제 금액)은 장수를 돌려주고 부분 환불은 돌려주지 않는다 |
+| `GET /api/shop/orders/attributed?from&to[&campaign_id&source&limit]` | 유입 출처(`src_source`·`src_medium`·`src_campaign`)가 있는 주문 목록(주문 id·시각·금액·상태·품목 product_id/qty/unit_price·유입 3값, `buyer_id` 등 개인값 없음). `data` 토큰만(admin도 403). `campaign_id`는 `src_campaign`, `source`는 `src_source`와 같은 값만. 취소·전액 환불 주문은 뺀다(쿠폰 사용 장수와 같은 기준). 기간 최대 31일, `limit` 기본 500(최대 1000)이고 넘으면 `truncated`. 주문 쪽은 `POST /api/shop/orders`에 선택 `src_*`를 받고(영문·숫자·`-`·`_`·`.` 64자, 어긋난 값은 422가 아니라 그 값만 비운다, 멱등 비교에 안 넣는다) |
+| `GET /api/shop/failed-orders?from&to[&category&limit]` | 실패 주문 목록(결제 `failed` 한 건이 한 줄, `category`는 첫 품목 분류, `reason`은 실패 코드). `data`·`admin` 토큰만. `from`·`to`는 시간대 있는 UTC 시각, `limit` 기본 1000(최대 5000)이고 넘으면 `truncated`. 결제 상태·시각 인덱스로 시각 순으로 읽다 limit에서 멈춘다. DB 읽기는 이벤트 루프 밖(스레드)에서 한다 |
+| `GET /api/shop/sales-summary?from&to[&group_by][&period]` | 결제가 끝난 주문의 판매 수량을 기준별로 합친다(읽기 전용, `support`·`data`·`admin` 토큰만). `from`·`to`는 시간대가 있는 시각(없으면 400 `INVALID_QUERY`), 접수 시각이 `from` 이상 `to` 미만이고 기간은 93일까지(넘으면 400 `RANGE_TOO_LONG`, `to`가 `from` 이하면 400 `INVALID_RANGE`). 선택 `period`(`day`·`week`·`month`)를 주면 접수 시각도 그 단위로 나눠 줄마다 `period_start`(구간 시작 날짜 `YYYY-MM-DD`, **한국 시간(KST, UTC+9) 기준**: 하루는 한국 날짜 0시, 주는 한국 월요일 0시, 월은 1일 0시에 시작, 날짜도 한국 날짜)가 붙고 구간 순으로 정렬하며 응답 `data`에 `period`가 실린다(다른 값은 422 `INVALID_PERIOD`, 안 주면 응답 모양은 그대로, 첫·끝 구간은 `from`·`to` 안의 주문만 센 부분 구간일 수 있고 작은 묶음 숨기기는 (구간, 기준) 줄마다 따로 판단한다). `group_by`는 `product`·`age_band`·`category`·`gender`·`occupation`·`genre`를 쉼표로 이어 고르고(기본 `product`, 중복은 하나로) 다른 값·빈 값은 422 `INVALID_GROUP_BY`. 응답 `data`는 `{from, to, group_by, rows, collected_at}`이고 한 줄은 묶은 기준 값(`product_id`·`age_band`·`category_code`·`gender`·`occupation`·`genre_code`)과 `order_count`(주문 수)·`gross_qty`·`net_qty`다. `gross_qty`는 결제가 끝난 주문의 판매 수량(전액 환불된 주문도 센다 — 클레임 비율의 분모), `net_qty`는 그중 전액 환불된 주문을 뺀 수량(`orders/attributed`·쿠폰 귀속 집계와 같은 기준, 취소된 주문은 결제가 끝난 적이 없어 처음부터 빠진다). **작은 묶음 숨기기**: `age_band`·`gender`·`occupation`으로 묶으면 한 줄의 구매자가 5명 미만일 때 `order_count`·`gross_qty`·`net_qty`를 `null`로 숨기고(줄은 남긴다) `suppressed: true`를 붙인다(이 기준이 든 집계의 모든 줄에 `suppressed`가 있고, 아닐 때는 키가 없다). 구매자 수는 주문 수가 아니라 서로 다른 구매자다. 개인이 드러나지 않게 하는 규칙이지만 **한계가 있다**: 같은 시각 범위를 다른 기준으로 나눠 부른 값끼리 빼면 숨긴 숫자를 추정할 수 있다(예: 월 줄에서 그 달의 일 줄들을 빼면 숨긴 하루, 합계 줄에서 보이는 줄들을 빼면 숨긴 줄). 이를 막는 보완 숨기기는 하지 않으므로 부르는 쪽은 서로 다른 단위·기준의 결과를 빼서 쓰지 않는다. `age_band`는 **주문 시점이 아니라 지금의 `buyers.age_band`**로 묶는다(구매자가 나중에 구간을 바꾸면 과거 주문도 새 구간으로 센다). `age_band`가 `null`인 줄은 연령대를 모르는 구매자다. 구매자 ID·이름·결제 수단은 돌려주지 않는다. 주문·품목 합계를 DB에서 한 번에 낸다(합성 주문 20만 건·93일 약 3.3초, 4만 건 약 0.5초, 로컬 측정). 판매 서버는 연결 하나를 잠가 쓰므로 합치는 동안 다른 요청이 기다린다 — 주문이 30만 건쯤이면 93일을 한 번에 읽을 때 몇 초 동안 연결을 잡아 결제도 기다리고 결제 모니터가 지연으로 잡을 수 있다. 부르는 쪽은 기간을 짧게 나눠 읽거나 몇 분 캐시해서 자주 부르지 않는다 |
+| `GET /api/shop/sales-export[?cursor&limit]` | 판매 기록 내보내기(계약 `data_access/shop_sales.py`, data 수집기가 매출 분석 표준 저장소로 받아 감). `data`·`admin` 토큰만. `(updated_at, order_id)` 오름차순, `limit` 1~1000(기본 500), 응답의 `next_cursor`를 다음 `cursor`로 넘기면 이어서 받는다(받은 것이 없으면 같은 커서). 상태가 바뀐 주문과 환불이 생긴 주문(환불 때 주문 `updated_at`을 바꾼다)은 다시 나온다. 같은 초에 늦게 저장된 주문을 건너뛰지 않게 `updated_at`이 5초 지난 주문만 준다. 주문마다 상품 줄(분류·쿠폰·포인트 몫)·결제 상태·환불(금액·시각). 이름·연락처·주소 없음, 쓰기 없음. `orders(updated_at, order_id)` 인덱스로 읽고 DB 읽기는 이벤트 루프 밖(스레드)에서 한다 |
+| `GET /api/shop/metric-series?metric&from&to[&bucket]` | 지표 시계열(`order_count`·`order_fail_count`·`payment_fail_rate`·`payment_count`와 주문 금액·쿠폰 지표 `order_amount`(결제가 끝난 주문의 `total_amount` 합계, 결제 대기·실패·취소는 빼고 환불은 안 뺀다)·`coupon_order_count`·`coupon_discount_amount`(쿠폰을 쓴 주문 수·할인 합계, 취소·전액 환불 주문은 뺀다), 5분 버킷). 건수·금액은 빈 버킷을 0으로 채우고 비율은 결제 시도가 없는 버킷을 뺀다(값이 없는 것과 0%를 섞지 않는다). 기간은 **24시간까지**(넘으면 422 `RANGE_TOO_LONG`, 더 긴 기간은 하루씩 나눠 부른다. data 커넥터는 이미 하루씩 나눈다). DB 읽기는 이벤트 루프 밖(스레드)에서 한다. `data`·`admin` 토큰만 |
+| `GET /api/shop/sellers/{seller_id}/profile` | 판매자 정보(data fraud_score). `joined_at`=`sellers.created_at`, `product_count`=판매 중 상품 수, `listings_last_24h`=`now−24시간 <= created_at <= now`인 상품 수. 사업자 정보가 테이블에 없어 `business_hash`·`business_hash_duplicated`는 null. 없는 판매자는 404 `SELLER_NOT_FOUND`. `data`·`admin` 토큰만 |
+| `GET /api/shop/sellers/{seller_id}/prices` | 판매자 판매 중 상품별 가격과 같은 카테고리 판매 중 상품(모든 판매자) 가격의 중앙값(짝수 개면 가운데 두 값 평균을 반올림). 없는 판매자는 404. `data`·`admin` 토큰만 |
+| `POST /api/shop/orders/{id}/cancel` | 미결제·결제 실패 주문 취소(결제된 주문의 환불은 SHOP-12) |
+
+- 장애 측정: 결제 시도마다 지연·5xx를 기록하고, **p95 1,000ms 초과 또는 5xx 2% 초과가 1분 지속**되면 `shop.degraded`(`component: payment`, `metric_code`: `p95_latency_ms`·`error_rate_5xx`)를, 정상 표본이 같은 지속 기준만큼 이어지면 `shop.recovered`를 발행한다. 장애 스위치 해제는 복구가 아니다: 켜져 있던 스위치를 끄면 그 스위치 때문에 쌓인 표본만 버리고 "해제됨"(`fault_state`의 `last_release`)을 남기며, 복구 신호는 새 표본으로 판정한다(이미 꺼져 있던 스위치를 끄면 아무것도 바꾸지 않고 응답의 `released`가 false). `shop.recovered`에는 풀린 방법 `recovery`(`fault_released` 장애 중 스위치를 껐음, `metrics_normal` 끄지 않고 지표가 정상)와 해제한 쪽 `released_by`(해제 API를 부른 토큰 이름, `infra`·`admin`)를 싣는다. 기준값은 `SHOP_DEGRADED_P95_MS`·`SHOP_DEGRADED_5XX_RATE`·`SHOP_DEGRADED_SUSTAIN_S`·`SHOP_MONITOR_WINDOW_S`로 바꾸고, 주기 판정 간격은 `SHOP_MONITOR_INTERVAL_S`(0이면 끔)다. 지연은 값만 기록한다(실제로 기다리지 않는다).
+- `notice.published`·`coupon.issued`는 shop-api가 아니라 마케팅 에이전트가 `execute()` 뒤에 발행한다(shop-api의 배너·쿠폰 API는 그 결과를 반영만 한다).
+- 발행 이벤트(공통 봉투, `source: shop-api`, `context_id: null`, 이벤트 버스는 `events.publish`만 사용): `order.created`, `order.cancelled`, `payment.succeeded`, `payment.failed`, `shop.degraded`, `shop.recovered`. 이벤트는 주문·결제와 같은 트랜잭션에 outbox로 저장하고 저장 뒤 발행한다(최소 한 번 전달, `event_id`는 키에서 만든다).
+- 이벤트 `data` 모델은 계약(`contracts`)에 있으면 그것을 쓴다(`payment.failed`). 나머지 모델은 `to:contracts` 요청(#11)으로 추가 중이라, 반영되면 계약 모델로 교체한다.
+- OpenAPI: `contracts/openapi/shop-api.json`은 CI가 자동 생성한다.
+## 3-1. 회원 로그인·구매자 본인 확인
+- 가입·로그인: `POST /api/shop/auth/signup`·`/auth/login`이 로그인 토큰을 준다(DB에는 sha256만 둔다). `POST /auth/logout`은 보낸 토큰을 끊는다. 토큰은 `Authorization: Bearer <토큰>`으로 보낸다.
+  - 시도 제한(프로세스 안, `accounts.py` 상수): 로그인은 이메일별 5분 10번·접속 IP별 5분 30번, 가입은 IP별 10분 5번, 비밀번호 확인(`/me/password`·`/me/withdraw`)은 구매자별 5분 10번. 넘으면 429 `RATE_LIMITED`. IP는 연결한 주소만 본다(프록시 헤더는 믿지 않는다). 비밀번호 해시(scrypt)는 스레드에서 돌려 이벤트 루프를 막지 않는다.
+  - `GET /api/shop/auth/demo-buyers` (토큰 없음, `SHOP_DEMO_LOGIN=on`일 때만, 꺼져 있으면 404) → 계정이 없는 옛 데모 구매자 `[{buyer_id, display_name, age_band}]` 최대 60명. 시험용 로그인 화면(`/dev/buyers`)이 쓴다.
+- 구매자 경로(`POST /orders`, `POST /orders/{id}/payments`, `.../payments/toss/prepare`, `POST /payments/toss/confirm`, `POST /orders/{id}/cancel`, `POST·GET /claims`, `POST·GET /inquiries`, `GET /inquiries/{id}`, `POST /inquiries/{id}/feedback`, `POST·GET /ideas`, 쿠폰을 쓸 때의 `POST /cart/price`, `GET·PATCH /users/{buyer_id}`)는 **로그인 토큰이 구매자를 정한다**. 본문·쿼리의 `buyer_id`는 선택이고, 보내면 토큰의 구매자와 같아야 한다(다르면 403 `BUYER_MISMATCH`). 남의 주문을 결제·취소하려 하면 없는 주문과 같은 404다.
+  - `admin` 토큰은 `buyer_id`를 함께 보내 구매자를 대신할 수 있다(가상 주문 스크립트·운영자, `buyer_id`가 없으면 422 `BUYER_REQUIRED`). 다른 서비스 토큰은 403.
+  - 토큰이 없으면 401 `LOGIN_REQUIRED`(`legacy`에서는 옛 동작대로 요청의 `buyer_id`). 알 수 없는·끊긴 토큰은 어느 모드에서나 401 `UNAUTHORIZED`.
+- 주문 조회 `GET /orders`·`GET /orders/{id}`: 구매자 토큰이면 본인 주문만(남의 주문은 404, 다른 `buyer_id`를 물으면 403), 서비스 토큰·연결 키면 전체, 토큰이 없으면 `SHOP_ORDERS_PUBLIC_READ=on`(기본)일 때 지금처럼 전체(AXcellent 재무·고객지원이 이렇게 읽는다)·`off`면 401. 알 수 없는 토큰은 401.
+- `GET /api/shop/users`(목록)는 `admin` 토큰만(`legacy`에서 토큰 없이 부르면 옛 동작).
+- 내 정보(구매자 로그인 토큰만, 없으면 401 `LOGIN_REQUIRED`, 서비스 토큰은 403):
+  - `GET /api/shop/customers-export?cursor=&limit=` (데이터·관리자 토큰만, `limit` 1~1000 기본 500) → `{data: {customers: [{buyer_id, joined_at, updated_at, attributes, tenant_id}], next_cursor, has_more, collected_at, tenant_id}}` (AXcellent 계약 `shop_customers`). `attributes`는 값이 있는 `age_band`·`gender`·`occupation`만 담는다. `next_cursor`는 늘 마지막 줄의 커서(빈 페이지면 받은 커서)이고 `has_more`가 참인 동안 이어 읽는다. 이름·연락처는 없다. 순서는 변경 순번(change_seq)이라 계약 설명의 updated_at 순서와 같은 뜻(바뀐 차례)이다. `(change_seq, buyer_id)` 순이고(`change_seq`는 가입·프로필 변경 때마다 오르는 번호, 옛 행은 0), 프로필을 고친 구매자는 다음 커서 읽기에 다시 나온다.
+  - `GET /api/shop/me` → 사용자 `{buyer_id, display_name, email, age_band, gender, occupation}`.
+  - `PATCH /api/shop/me` `{display_name?, age_band?, gender?, occupation?}` → 보낸 칸만 바꾼다(코드값만, null이면 지움, 이름은 지울 수 없다, 칸이 없으면 422). `buyers.updated_at`을 적는다.
+  - `POST /api/shop/me/password` `{current, new}` → 현재 비밀번호가 틀리면 401 `INVALID_PASSWORD`, 새 비밀번호는 8~128자(422 `WEAK_PASSWORD`), 비밀번호가 없는 데모 구매자는 409 `NO_PASSWORD`. 바꾸면 **지금 토큰을 뺀 이 구매자의 다른 로그인을 모두 끊는다**.
+  - `POST /api/shop/me/withdraw` `{password}` → 회원 탈퇴. 비밀번호가 틀리면 403 `INVALID_PASSWORD`, 데모 구매자는 409 `NO_PASSWORD`. 맞으면 `{withdrawn: true}`이고 계정(이메일·비밀번호 해시·이름)·후기·로그인 토큰을 지우고 연령대·성별·직업군을 비운 뒤 `change_seq`를 올린다(`retention.remove_account`, `purge-buyer`와 같은 함수). 주문·클레임 기록과 구매자 가명 ID는 법정 보존(5년)으로 남는다.
+- 구매 후기(`reviews` 표, 후기 ID `rev_0001`~):
+  - `POST /api/shop/products/{product_id}/reviews` `{order_id, rating(1~5), body(10~1000자)}` (구매자 토큰) → 201. 본인 주문이고 그 상품이 품목에 있고 `delivered_at`이 있어야 한다(아니면 403 `NOT_REVIEWABLE`). 주문·상품마다 한 번(409 `REVIEW_EXISTS`).
+  - `GET /api/shop/products/{product_id}/reviews?page=&size=` (공개, 최신순, `size` 기본 10·최대 50) → `{data: {summary: {count, avg, by_rating: {"1".."5"}}, items: [{review_id, rating, body, created_at, author_label}]}, meta: {total, page, size}}`. `author_label`은 연령대가 있으면 `10대`~`40대`·`50대 이상`, 없으면 `구매자`. 구매자 ID·이름은 싣지 않는다.
+  - `GET /api/shop/me/reviews` (구매자 토큰) → 내 후기(`product_id`·`order_id` 포함). `GET /api/shop/me/reviewable` → 아직 후기를 안 쓴 배송 완료 품목 `[{order_id, product_id, title}]`.
+  - 보유기간 삭제로 구매자 행이 지워지거나, 회원 탈퇴·삭제 요청 집행 때 그 구매자의 후기도 같이 지운다.
+
+| 환경변수 | 기본값 | 뜻 |
+| --- | --- | --- |
+| `SHOP_BUYER_AUTH` | `required` | `required`: 구매자 경로는 로그인 토큰(또는 `admin` 대신하기)만. `legacy`: 토큰이 없으면 요청의 `buyer_id`를 믿는다(옛 동작, 시험·전환 기간용). 모르는 값은 `required` |
+| `SHOP_BEST_CACHE_S` | `300` | 공개 베스트 결과를 캐시하는 초(0이면 캐시 안 함) |
+| `SHOP_ORDERS_PUBLIC_READ` | `on` | `off`면 토큰 없는 주문 조회를 401로 막는다 |
+| `SHOP_DEMO_LOGIN` | (꺼짐) | `on`일 때만 비밀번호 없는 데모 로그인(`POST /auth/demo-login`, `POST /sessions`)이 열린다. 배포에는 넣지 않는다 |
+| `SHOP_SESSION_DAYS` | 30 | 로그인 토큰 유효 일수(1~3650, 그 밖의 값은 기본값) |
+| `SHOP_TRUST_PROXY` | (꺼짐) | `on`이면 로그인·가입 시도 제한이 `X-Forwarded-For`의 마지막 값(게이트웨이가 붙인 손님 주소)을 쓴다. 게이트웨이 뒤에서만 켜고, 그때는 판매 서버 포트를 밖에 열지 않는다(헤더를 꾸밀 수 있다) |
+
+가상 주문 스크립트(`backend/scripts/shop_traffic.py`)는 `required`에서 `admin` 토큰 + `buyer_id` 또는 회원 로그인으로 바꿔야 한다.
+
+## 4. 의존
+`ax-contracts`, `ax-agent-template`. 다른 부서 폴더를 import하지 않는다.
+## 4-1. 보유기간 삭제 (retention)
+개인정보처리방침 제4조의 보유기간을 코드로 옮긴 것이다(`retention.py`). **삭제는 기본 dry-run(건수만 센다)이고, 실제 삭제(apply)는 사람이 켠다.** 5년은 방침 제4조 기준이며, 모의 거래에도 적용할지(제4조 ⑦)는 미확정이라 설정값이다. 다른 사람의 기록을 지우는 외부 엔드포인트는 없고, 삭제 요청의 집행은 사람 승인 뒤 운영자가 CLI로만 한다(회원 본인의 탈퇴 `POST /api/shop/me/withdraw`만 비밀번호 확인 뒤 같은 계정 삭제를 쓴다).
+
+| 환경변수 | 기본값 | 뜻 |
+| --- | --- | --- |
+| `SHOP_RETENTION_TRANSACTION_DAYS` | 1825 (5년) | 주문·품목·결제·환불·반품·쿠폰의 보유 일수(기준은 각 행의 `created_at`) |
+| `SHOP_RETENTION_OUTBOX_DAYS` | 90 | **발송이 끝난**(`sent_at` 있음) outbox 이벤트의 보유 일수 |
+| `SHOP_RETENTION_BUYER_DAYS` | 90 | 구매자 행의 보유 일수(남은 주문·쿠폰이 없을 때만) |
+| `SHOP_RETENTION_ENABLED` | 1 | 하루 한 번 도는 백그라운드 작업 켜기/끄기(`0`·`false`·`off`·`no`면 끔) |
+| `SHOP_RETENTION_APPLY` | (없음) | `1`일 때만 백그라운드가 실제로 지운다. 아니면 건수만 로그 |
+
+- 일수는 양의 정수(상한 36500)만 받고, 비었거나 정수가 아니거나 0 이하면 기본값이다.
+- 만료 기준은 "기준 시각 이전 또는 같음"(`created_at <= now − N일`)이다.
+- 백그라운드 작업은 **DB가 파일일 때만**(`SHOP_DB_PATH`) 앱 시작 때 켜지고 하루에 한 번 돈다. `:memory:`면 건너뛴다. 실패해도 앱은 계속 돌고 로그에는 예외 종류만 남는다.
+
+| 대상 | 지우는 조건 | 남기는 것 |
+| --- | --- | --- |
+| `refunds`·`returns` | `created_at`이 5년 이상 지남 | 5년 안의 행 |
+| `payments` | 5년 이상 지났고 남은 환불이 없음 | 환불이 남아 있는 결제 |
+| `order_items`·`orders` | 주문이 5년 이상 지났고 남은 결제·환불·반품이 없음(품목은 주문과 함께) | 더 새로운 결제·환불·반품이 붙은 주문 |
+| `coupons` | `created_at`이 5년 이상 지남 | 5년 안의 쿠폰 |
+| `outbox_events` | 발송 완료(`sent_at` 있음) + 90일 이상 | **발송 안 된 이벤트는 몇 년이 지나도 남김** |
+| `buyers` | 90일 이상 지났고 남은 주문·쿠폰이 없음 | 5년 보관 주문·쿠폰이 있는 구매자(외래키) |
+| 시드 데모 구매자(`seed.SEED_BUYER_IDS`) | **절대 지우지 않음.** 그 구매자의 주문·쿠폰도 대상에서 제외 | 전부 |
+
+- 지우는 순서는 자식 → 부모(refunds, returns, payments, order_items, orders, coupons, outbox_events, buyers)이고 한 트랜잭션이다.
+- 지우기 전에 **일별 집계**만 `retention_daily_stats`(`stat_date`·`kind`·`rows_count`·`amount_sum`·`tenant_id`)에 더한다. 구매자·주문 번호 같은 식별 정보는 넣지 않는다. 테이블은 `CREATE TABLE IF NOT EXISTS`라 기존 DB 파일에도 시작할 때 만들어진다.
+- 보고서·로그·CLI 출력에는 건수만 있다(구매자 ID·금액 없음).
+
+CLI(`SHOP_DB_PATH`가 가리키는 파일 DB에서 실행, 기본은 dry-run):
+```
+python -m ax_shop_api.retention run [--apply]
+python -m ax_shop_api.retention purge-buyer <buyer_id> [--apply] [--include-retained]
+```
+- `run`: 만료분 정리. `--apply`가 없으면 건수만 센다. `--apply`면 만료된 로그인 토큰(`sessions.expires_at`이 지난 것)도 지운다(건수에는 넣지 않는다).
+- `purge-buyer`: **정보주체 삭제 요청의 집행부.** AI의 1차 본인 확인과 사람의 최종 판단이 끝난 뒤에만 운영자가 쓴다.
+  - 기본: 법정 보존 대상(주문·품목·결제·환불·반품·쿠폰, 5년)을 **남기고**, 그 구매자 관련 **발송 완료 outbox 이벤트**(페이로드의 `buyer_id` 또는 그 구매자 주문 번호로 찾음)와, 남은 주문·쿠폰이 없을 때의 구매자 행만 지운다. 발송 안 된 이벤트는 남긴다.
+  - `--include-retained`: 그 구매자의 주문·품목·결제·환불·반품·쿠폰까지 지운다(프로젝트 종료 또는 법적 보존 비적용이 확정됐을 때만).
+  - 어느 쪽이든 **계정 쪽 기록은 늘 지운다**: 후기·로그인 토큰·계정을 지우고, 구매자 행이 남더라도 연령대·성별·직업군을 비우고 `change_seq`를 올린다(고객 내보내기에 다시 나온다). 건수는 `reviews`·`sessions`·`accounts` 키로 따로 보인다(일별 집계는 남기지 않는다).
+  - 시드 구매자는 거부(종료 코드 2), 없는 구매자는 종료 코드 1.
+- 종료 코드 2: `:memory:` DB에서는 실행하지 않는다.
+## 4-2. 토스페이먼츠 테스트 결제 (`toss.py`)
+사람이 쇼핑몰 화면에서 결제할 때만 토스 테스트 결제를 쓴다. 자동 트래픽(`scripts/shop_traffic.py`)과 `POST /orders/{id}/payments`는 그대로 가짜 결제다. 화면(shop-web)은 다른 레포다.
+
+| 환경변수 | 기본값 | 뜻 |
+| --- | --- | --- |
+| `PAYMENT_PROVIDER` | `fake` | `fake` 또는 `toss_test` |
+| `TOSS_SECRET_KEY` | (없음) | 토스 **테스트** 시크릿 키. `backend/.env`에만 둔다(`run_all.sh`가 넘긴다). 커밋·출력 금지 |
+
+- `toss_test`인데 키가 없거나 `test_`로 시작하지 않으면(라이브 키 `live_…` 포함) **가짜 결제로 동작**하고 시작할 때 경고 한 줄을 남긴다. 키 값은 응답·로그·경고 어디에도 나가지 않는다(앞 몇 글자도).
+- 흐름: 화면이 `payment-config`로 방식을 보고 → `prepare`로 `toss_order_id`·금액·주문명을 받아 토스 결제위젯을 연다 → 위젯 성공 리다이렉트의 `paymentKey`·`orderId`·`amount`로 `confirm`을 부른다 → 서버가 금액을 시도 금액과 비교한 뒤 토스 승인 API(`POST https://api.tosspayments.com/v1/payments/confirm`, Basic 인증 `시크릿키:`, `Idempotency-Key` = `toss_order_id`, 타임아웃 10초)를 부른다.
+- 결과 기록은 가짜 결제와 같은 함수(`Shop._record_payment`)다: `payments` 행, 주문 상태(`paid`/`payment_failed`), `payment.succeeded`/`payment.failed` 이벤트, 결제 모니터 표본.
+  - 200 → 성공. 토스 `method`를 `method_code`로: 카드 `card`, 계좌이체 `transfer`, 간편결제 `easy_pay`, 휴대폰 `phone`, 그 밖 `other`.
+  - 4xx → `PG_DECLINED`(5xx로 세지 않음), 토스 `code`는 `failure_detail`.
+  - 5xx·타임아웃·연결 실패 → `PG_UNAVAILABLE`(5xx로 셈), `failure_detail`은 토스 `code` 또는 `TIMEOUT`·`CONNECT_ERROR`.
+  - 걸린 시간은 실제로 재서 지연 표본(`latency_ms`)으로 쓴다.
+- 장애 주입(SHOP-06): `failure`면 **토스를 부르지 않고** `PG_UNAVAILABLE`(5xx, `failure_detail` `FAULT_INJECTED`)로 실패시켜 `shop.degraded`(5xx 비율)에 들어간다. `latency`는 가짜 결제처럼 값으로만 더한다(실제로 기다리지 않음).
+- 같은 시도를 동시에 두 번 승인해도 토스는 한 번만 부른다(프로세스 안 잠금 + 토스 `Idempotency-Key`).
+- 표: `payment_attempts`(새 표: `toss_order_id`·`order_id`·`amount`·`status` `prepared`/`confirmed`/`failed`·`payment_id`·`created_at`·`updated_at`), `payments`에 `provider`(`fake`·`toss_test`, 옛 행은 `fake`)·`pg_payment_key`·`failure_detail` 칸 추가(시작할 때 `ADD COLUMN`).
+
+## 4-3. 실제 책 상품 넣기
+도서관 정보나루(data4library.kr) Open API의 인기대출도서·도서 상세로 장르별 실제 책(약 30권씩, 13개 도서 장르)을 받아 상품으로 넣는다. 문구 45개(필기구·노트·다꾸 15개씩)는 공개 자료가 없어 일반 이름으로 만든 데모 상품이다.
+- 키: `backend/.env`에 `DATA4LIBRARY_API_KEY=...`(커밋 금지). 스크립트는 그 한 줄만 읽고 키를 출력·저장하지 않는다.
+- 목록 다시 받기(가끔, 사람이): `cd backend && uv run python scripts/seed_books.py` → `shop-api/src/ax_shop_api/catalog/books.json`을 다시 쓴다. 1초에 한 번 이하로 부르고 전체 호출은 `--max-calls`(기본 600)까지, 응답은 `backend/.cache/data4library/`에 캐시해 이어서 한다. KDC → 장르 표는 스크립트 안에 있다(분류 못 하는 책은 뺀다).
+- DB에 넣기: `SHOP_DB_PATH=... uv run python -m ax_shop_api.load_catalog [--dry-run]`. 같은 ISBN의 책·같은 이름의 문구는 건너뛰어 여러 번 돌려도 같고, 시드 상품 prd_0001~0008과 `seed.py` 기본 동작은 그대로다. 한 트랜잭션이지만 서버를 멈춘 때(또는 주문이 없는 조용한 때) 돌린다. `books.json`이 없으면 책은 건너뛰고 문구만 넣는다.
+- 출처: 책 제목·저자·출판사·분류·소개는 **도서관 정보나루**에서 왔다(쇼핑몰 하단에 출처 표시). **가격·재고는 API에 없어 ISBN으로 정한 데모 값**이고, 표지 그림은 받지 않는다(쇼핑몰이 그리는 표지).
+
+## 5. 하지 않는 것
+- 판단·분석 문장을 만들지 않는다 (이벤트에는 사실만 담는다)
+- 다른 서비스의 DB를 읽지 않는다. 판매 사이트 DB를 다른 서비스가 직접 읽게 하지 않는다 (API로만)
+- 별도 HTTP 이벤트 엔드포인트를 만들지 않는다 (`events.publish`만)
+- 결제된 주문을 환불 API 없이 취소하지 않는다
+- 개인정보를 저장하지 않는다 (구매자는 가명 ID만)
+## 6. 다음 단계
+- 토스 결제 환불·취소 API 연동. 지금 환불(`POST /payments/{id}/refund`)은 토스 결제여도 장부 기록만 한다.
+- 토스 웹훅. 서버(251)가 사내망이라 토스가 부를 수 없어 받지 않는다(승인 결과는 `confirm` 응답으로만 안다).
+- 보유기간 삭제(retention)가 `payment_attempts`를 아직 지우지 않는다(금액·주문 번호만 있고 개인정보는 없다).

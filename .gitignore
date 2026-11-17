@@ -1,0 +1,26 @@
+# 비밀값·로컬 데이터 (커밋 금지)
+.env
+.env.*
+!.env.example
+*.db
+*.db-*
+.data/
+tokens.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+
+# 편집기
+.vscode/
+.idea/
+
+# 도서관 정보나루 응답 캐시 (backend/scripts/seed_books.py, 키는 담지 않는다)
+backend/.cache/
