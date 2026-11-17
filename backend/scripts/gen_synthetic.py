@@ -10,6 +10,8 @@
     SHOP_DB_PATH=.data/shop.db uv run python scripts/gen_synthetic.py [--members 50000]
         [--seed 20261115] [--end 2026-11-15] [--trend-start 2026-10-08]
         [--out ~/catbooks-synthetic-out] [--replace]
+    # 되채우기 뒤 하루 흐름(살아 있는 주문): scripts/gen_synthetic_daily.py (= --daily)
+    SHOP_ADMIN_TOKEN=... uv run python scripts/gen_synthetic.py --daily [--interval-s 600]
 
 - 기간: 끝 날짜(`--end`, 기본 오늘(한국 시간) 하루 전)까지 90일. 모든 시각은 과거이고 마지막 1시간
   안의 기록은 없다(결제 감시가 반응하지 않게).
@@ -650,6 +652,25 @@ def chuseok_week(start: date, end: date) -> tuple[date, date] | None:
     return None
 
 
+WEEKEND_TILT = (1, 1, 1, 1, 1, 1.6, 1.6)  # 주말에 더 사는 유형(10대)의 요일 기울기
+WEEKEND_NORM = sum(d * t for d, t in zip(DOW_INDEX, WEEKEND_TILT, strict=True)) / 7
+
+
+def day_factor(day: date, week: tuple[date, date] | None) -> float:
+    """그날의 월·요일·월급날·추석 주 효과(평균 1 근처). `week`는 추석이 낀 주(월~일)."""
+    value = MONTH_INDEX[day.month] * DOW_INDEX[day.weekday()]
+    if day.day == PAYDAY:
+        value *= PAYDAY_FACTOR
+    if week and week[0] <= day <= week[1]:
+        value *= CHUSEOK_FACTOR
+    return value
+
+
+def weekend_factor(day: date, factor: float) -> float:
+    """주말에 더 사는 유형의 그날 효과(`day_factor` 값에 요일 기울기를 곱한다)."""
+    return factor * WEEKEND_TILT[day.weekday()] / WEEKEND_NORM
+
+
 def build_window(config: Config, now: datetime) -> Window:
     end = config.end or default_end(now)
     if end >= now.astimezone(KST).date():
@@ -660,17 +681,8 @@ def build_window(config: Config, now: datetime) -> Window:
         raise ValueError("트렌드 시작(--trend-start)은 기간 안이어야 해요")
     days = [start + timedelta(days=i) for i in range(WINDOW_DAYS)]
     week = chuseok_week(start, end)
-    factor = []
-    for day in days:
-        value = MONTH_INDEX[day.month] * DOW_INDEX[day.weekday()]
-        if day.day == PAYDAY:
-            value *= PAYDAY_FACTOR
-        if week and week[0] <= day <= week[1]:
-            value *= CHUSEOK_FACTOR
-        factor.append(value)
-    tilt = [1, 1, 1, 1, 1, 1.6, 1.6]
-    norm = sum(d * t for d, t in zip(DOW_INDEX, tilt, strict=True)) / 7
-    weekend = [f * tilt[d.weekday()] / norm for f, d in zip(factor, days, strict=True)]
+    factor = [day_factor(day, week) for day in days]
+    weekend = [weekend_factor(d, f) for f, d in zip(factor, days, strict=True)]
     trend = [trend_multiple((d - trend_start).days + 0.5) - 1 for d in days]
     end_utc = _kst_midnight(end + timedelta(days=1))
     cutoff = min(end_utc, now - timedelta(hours=1))
@@ -1044,28 +1056,10 @@ def assemble_orders(
         member = sim.members[index]
         day = window.day_of(moment)
         trend = window.trend[day]
-        weights = genre_boosts(member, trend, sim.norms)
-        hot = min(1.0, trend / (TREND_PEAK - 1))
-        wanted: list[Product] = []
         forced = member.persona is SMALL_GROUP
-
-        for _ in range(0 if forced else rng.pick(BOOK_LINES)):
-            if member.persona.stationery_lines and rng.random() < member.persona.stationery_lines:
-                genre = rng.pick({"deco": 0.4, "notebook": 0.35, "writing": 0.25}.items())
-            else:
-                genre = rng.pick(weights.items())
-            _add(wanted, shelf.pick(genre, rng, hot))
-        if forced:
-            _add(wanted, shelf.pick("language", rng, 0.0))
-        elif rng.random() < member.persona.addon:
-            _add(wanted, shelf.pick(rng.pick(STATIONERY_MIX.items()), rng, 0.0))
-        subtotal = sum(p.price for p in wanted)
-        if not forced and NUDGE_FROM <= subtotal < FREE_SHIPPING_FROM and rng.random() < NUDGE_P:
-            _add(wanted, shelf.filler(FREE_SHIPPING_FROM - subtotal, rng))
         lines = []
         missed = []
-        for product in wanted:
-            qty = 2 if (not forced and rng.random() < QTY_TWO) else 1
+        for product, qty in basket(member, trend, sim.norms, shelf, rng):
             if stock[product.product_id] < qty:
                 missed.append(product)
                 continue
@@ -1118,6 +1112,30 @@ def assemble_orders(
         "buyers": [m.buyer_id for m in group if m.orders],
         "genre_code": "language" if shelf.by_genre.get("language") else None,
     }
+
+
+def basket(
+    member: Member, trend: float, norms: dict[str, float], shelf: Shelf, rng: Rng
+) -> list[tuple[Product, int]]:
+    """회원이 그날 담는 상품과 수량(재고는 보지 않는다). 되채우기와 매일 모드가 같이 쓴다."""
+    weights = genre_boosts(member, trend, norms)
+    hot = min(1.0, trend / (TREND_PEAK - 1))
+    wanted: list[Product] = []
+    forced = member.persona is SMALL_GROUP
+    for _ in range(0 if forced else rng.pick(BOOK_LINES)):
+        if member.persona.stationery_lines and rng.random() < member.persona.stationery_lines:
+            genre = rng.pick({"deco": 0.4, "notebook": 0.35, "writing": 0.25}.items())
+        else:
+            genre = rng.pick(weights.items())
+        _add(wanted, shelf.pick(genre, rng, hot))
+    if forced:
+        _add(wanted, shelf.pick("language", rng, 0.0))
+    elif rng.random() < member.persona.addon:
+        _add(wanted, shelf.pick(rng.pick(STATIONERY_MIX.items()), rng, 0.0))
+    subtotal = sum(p.price for p in wanted)
+    if not forced and NUDGE_FROM <= subtotal < FREE_SHIPPING_FROM and rng.random() < NUDGE_P:
+        _add(wanted, shelf.filler(FREE_SHIPPING_FROM - subtotal, rng))
+    return [(p, 2 if (not forced and rng.random() < QTY_TWO) else 1) for p in wanted]
 
 
 def _add(wanted: list[Product], product: Product | None) -> None:
@@ -1447,6 +1465,21 @@ def _claim_kind(reason: str, rng: Rng) -> str:
     return "return"
 
 
+def claim_reason(late: bool, rng: Rng) -> str:
+    """배송 완료 주문의 클레임 사유. 늦게 온 주문이면 절반은 늦은 배송이다."""
+    reasons = [(r, w) for r, w in CLAIM_REASONS if r != "late_delivery" or late]
+    return "late_delivery" if (late and rng.random() < 0.5) else rng.pick(reasons)
+
+
+def claim_details(reason: str, rng: Rng) -> tuple[str, int, bool, str]:
+    """사유에 맞는 (고객 문장, 사진 수, 개봉 여부, 종류)."""
+    text = rng.choice(CLAIM_TEXT[reason]).format(a=rng.randrange(20, 200), b=0)
+    text = text.replace("~0쪽", "쪽")
+    evidence = rng.randint(1, 3) if reason in EVIDENCE_REASONS else 0
+    unsealed = reason == "change_of_mind" and rng.random() < 0.3
+    return text, evidence, unsealed, _claim_kind(reason, rng)
+
+
 def random_claims(sim: Simulation, rng: Rng, exclude: set[str]) -> int:
     """배송 완료 주문에 클레임을 낸다.
 
@@ -1471,8 +1504,7 @@ def random_claims(sim: Simulation, rng: Rng, exclude: set[str]) -> int:
         lines = [i for i, line in enumerate(order.lines) if line.product.product_id not in exclude]
         if not lines:
             continue
-        reasons = [(r, w) for r, w in CLAIM_REASONS if r != "late_delivery" or order.late]
-        reason = "late_delivery" if (order.late and rng.random() < 0.5) else rng.pick(reasons)
+        reason = claim_reason(order.late, rng)
         picked = lines if (len(lines) > 1 and rng.random() < 0.2) else [rng.choice(lines)]
         span = 6 if reason == "change_of_mind" else 12
         at = _within(order.delivered + timedelta(hours=6), span, rng, window.cutoff)
@@ -1485,13 +1517,23 @@ def random_claims(sim: Simulation, rng: Rng, exclude: set[str]) -> int:
             if guard.would_trip(claimed, reason, at):
                 continue
         guard.add(claimed, reason, at)
-        text = rng.choice(CLAIM_TEXT[reason]).format(a=rng.randrange(20, 200), b=0)
-        text = text.replace("~0쪽", "쪽")
-        evidence = rng.randint(1, 3) if reason in EVIDENCE_REASONS else 0
-        unsealed = reason == "change_of_mind" and rng.random() < 0.3
-        kind = _claim_kind(reason, rng)
+        text, evidence, unsealed, kind = claim_details(reason, rng)
         sim.claims.append(Claim(order, picked, kind, reason, at, unsealed, evidence, text))
     return adjusted
+
+
+def review_text(genre: str | None, claim_reason: str | None, rng: Rng) -> tuple[int, str]:
+    """후기 별점과 문장. 클레임을 낸 품목이면(`claim_reason`) 별점이 낮다."""
+    if claim_reason in DEFECT_REASONS:
+        rating = rng.choice((1, 1, 2))
+    elif claim_reason:
+        rating = rng.choice((2, 3))
+    else:
+        rating = rng.pick(RATINGS)
+    body = rng.choice(REVIEW_TEXT[rating])
+    if rating >= 4 and genre == TREND_GENRE and rng.random() < 0.5:
+        body = rng.choice(IT_REVIEW)
+    return rating, body
 
 
 def reviews_and_inquiries(sim: Simulation, rng: Rng, next_review: int) -> None:
@@ -1507,15 +1549,7 @@ def reviews_and_inquiries(sim: Simulation, rng: Rng, next_review: int) -> None:
                 if at is None:
                     continue
                 claim = claimed.get((id(order), i))
-                if claim and claim.reason in DEFECT_REASONS:
-                    rating = rng.choice((1, 1, 2))
-                elif claim:
-                    rating = rng.choice((2, 3))
-                else:
-                    rating = rng.pick(RATINGS)
-                body = rng.choice(REVIEW_TEXT[rating])
-                if rating >= 4 and line.product.genre == TREND_GENRE and rng.random() < 0.5:
-                    body = rng.choice(IT_REVIEW)
+                rating, body = review_text(line.product.genre, claim and claim.reason, rng)
                 raw.append((at, order, i, rating, body))
         _maybe_inquiry(sim, order, rng)
     raw.sort(key=lambda r: (r[0], r[1].order_id, r[2]))
@@ -1524,9 +1558,15 @@ def reviews_and_inquiries(sim: Simulation, rng: Rng, next_review: int) -> None:
 
 
 def _maybe_inquiry(sim: Simulation, order: Order, rng: Rng) -> None:
+    inquiry = plan_inquiry(order, rng, sim.window.cutoff)
+    if inquiry is not None:
+        sim.inquiries.append(inquiry)
+
+
+def plan_inquiry(order: Order, rng: Rng, cutoff: datetime) -> Inquiry | None:
+    """결제된 주문의 문의(배송·영수증·삭제 요청) 하나 또는 None. 시각은 `cutoff` − 1시간까지."""
     if order.paid is None or order.forced:
-        return
-    cutoff = sim.window.cutoff
+        return None
     late_ask = order.late and rng.random() < 0.10
     if not late_ask and rng.random() >= INQUIRY_RATE:
         return
@@ -1536,7 +1576,7 @@ def _maybe_inquiry(sim: Simulation, order: Order, rng: Rng) -> None:
         else rng.pick((("delivery", 0.55), ("receipt", 0.37), ("deletion", 0.04), (None, 0.04)))
     )
     if kind is None:
-        return
+        return None
     if kind == "delivery":
         start = order.promised if order.late else order.paid + timedelta(days=1)
         until = order.delivered or cutoff
@@ -1564,8 +1604,7 @@ def _maybe_inquiry(sim: Simulation, order: Order, rng: Rng) -> None:
         at = _within(order.created + timedelta(days=1), 20, rng, cutoff)
         subject = "[개인정보 삭제 요청] 회원 정보 삭제를 요청해요"
         message = "더 이상 이용하지 않아서 제 회원 정보를 지워 주세요. 법으로 남겨야 하는 주문 기록은 괜찮아요."  # noqa: E501
-    if at is not None:
-        sim.inquiries.append(Inquiry(order, kind, subject, message, at))
+    return None if at is None else Inquiry(order, kind, subject, message, at)
 
 
 # --- 전체 ------------------------------------------------------------------------------------
@@ -2407,6 +2446,12 @@ def _date(text: str) -> date:
 
 
 def main(argv: list[str] | None = None) -> int:
+    args_in = sys.argv[1:] if argv is None else list(argv)
+    if "--daily" in args_in:  # 되채우기 뒤의 하루 흐름(scripts/gen_synthetic_daily.py)
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import gen_synthetic_daily
+
+        return gen_synthetic_daily.main([a for a in args_in if a != "--daily"])
     parser = argparse.ArgumentParser(description="캣북스 가상 회원·주문을 판매 서버 DB에 넣는다")
     parser.add_argument("--db", help="DB 파일(기본 SHOP_DB_PATH)")
     parser.add_argument("--members", type=int, default=DEFAULT_MEMBERS)
@@ -2416,7 +2461,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="정답지 폴더(커밋 금지)")
     parser.add_argument("--dry-run", action="store_true", help="계산만 하고 쓰지 않는다")
     parser.add_argument("--replace", action="store_true", help="있는 가상 회원을 지우고 다시")
-    args = parser.parse_args(argv)
+    parser.add_argument("--daily", action="store_true", help="하루 흐름 모드(gen_synthetic_daily)")
+    args = parser.parse_args(args_in)
     if args.members < 1:
         parser.error("--members는 1 이상이어야 해요")
     db = Db(args.db)
