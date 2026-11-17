@@ -857,12 +857,19 @@ def create_app(
         return {"data": {"status": "ok"}, "meta": {}}
 
     @app.get("/api/shop/users")
-    async def list_users(request: Request) -> dict:
-        """구매자 목록은 `admin` 토큰만. `legacy`에서 토큰 없이 부르면 옛 동작대로 준다."""
+    async def list_users(
+        request: Request,
+        real_only: bool = False,
+        limit: Annotated[int | None, Query(ge=1, le=1000)] = None,
+    ) -> dict:
+        """구매자 목록은 `admin` 토큰만. `legacy`에서 토큰 없이 부르면 옛 동작대로 준다.
+
+        `real_only=true`면 가상 회원(`buy_100001`~)을 빼고, `limit`명(최대 1000)까지 준다.
+        """
         authorization = request.headers.get("authorization")
         if not (_buyer_auth_legacy() and _bearer(authorization) is None):
             _caller(INJECT_ALLOWED)(request, authorization)
-        return _ok(storefront.list_users())
+        return _ok(storefront.list_users(real_only, limit))
 
     @app.get("/api/shop/users/{buyer_id}")
     async def get_user(buyer_id: str, request: Request) -> dict:

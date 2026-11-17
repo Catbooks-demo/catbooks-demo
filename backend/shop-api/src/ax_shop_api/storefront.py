@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from ax_shop_api import synthetic_ids
 from ax_shop_api.db import Db
 from ax_shop_api.service import FREE_SHIPPING_FROM, SHIPPING_FEE, ShopError, use_coupon
 
@@ -26,9 +27,18 @@ class Storefront:
         number = buyer_id.rsplit("_", 1)[-1]
         return {"buyer_id": buyer_id, "display_name": f"데모 구매자 {number}"}
 
-    def list_users(self) -> list[dict[str, Any]]:
+    def list_users(self, real_only: bool = False, limit: int | None = None) -> list[dict[str, Any]]:
+        """구매자 목록(ID 순). `real_only`면 가상 회원(`synthetic_ids`)을 빼고, `limit`명까지."""
+        sql = "SELECT buyer_id FROM buyers"
+        if real_only:
+            sql += f" WHERE NOT {synthetic_ids.BUYER_WHERE}"  # noqa: S608 - 상수 조건
+        sql += " ORDER BY buyer_id"
+        args: list[Any] = []
+        if limit is not None:
+            sql += " LIMIT ?"
+            args.append(limit)
         with self.db.tx() as conn:
-            rows = conn.execute("SELECT buyer_id FROM buyers ORDER BY buyer_id").fetchall()
+            rows = conn.execute(sql, args).fetchall()
         return [self._user(r["buyer_id"]) for r in rows]
 
     def get_user(self, buyer_id: str) -> dict[str, Any]:
