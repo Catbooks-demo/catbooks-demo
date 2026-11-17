@@ -370,3 +370,99 @@ def test_bare_catalog_still_runs_with_warning(tmp_path: Path) -> None:
     assert result.answer_key["totals"]["orders"] > 0
     assert any("장르가 붙은 책" in w for w in result.answer_key["warnings"])
     assert result.answer_key["catalog"]["products_by_genre"]["it"] == 0
+
+
+def _real_customer(db: Db) -> dict[str, str]:
+    """실제 가입자 한 명의 주문·결제·도착·후기·클레임(가상 데이터와 섞여도 남아야 한다)."""
+    from ax_shop_api import claim_inbox
+    from ax_shop_api.reviews import Reviews
+
+    _, user = Accounts(db).signup("real@example.com", "password-123", "실제", "30s", None, None)
+    buyer = user["buyer_id"]
+    shop = Shop(db)
+    order = shop.create_order(buyer, [("prd_0102", 1)])
+    shop.pay(order["order_id"], "card", None)
+    shop.mark_delivered(order["order_id"])
+    Reviews(db).create(buyer, "prd_0102", order["order_id"], 5, "아주 좋은 책이었어요 정말로")
+    claim_inbox.add(
+        db, digest="real-claim", context_id="ctx_shop_real", buyer_id=buyer,
+        customer_name=buyer, order_id=order["order_id"], type_="return", reason="defect",
+        items=None, unsealed=False, evidence_count=1, description="파본",
+    )  # fmt: skip
+    return {"buyer": buyer, "order": order["order_id"]}
+
+
+def _real_rows(db: Db, buyer: str) -> tuple:
+    with db.tx() as conn:
+        return tuple(
+            conn.execute(f"SELECT COUNT(*) FROM {t} WHERE buyer_id = ?", (buyer,)).fetchone()[0]
+            for t in ("buyers", "accounts", "orders", "reviews", "claim_inbox")
+        )
+
+
+def test_replace_keeps_real_signup_and_moves_change_seq_forward(tmp_path: Path) -> None:
+    db = _db(tmp_path / "s.db")
+    real = _real_customer(db)
+    assert real["buyer"] == "buy_0031"
+    before = _real_rows(db, real["buyer"])
+    assert before == (1, 1, 1, 1, 1)
+    first = _run(db)
+    planted = {b["product_id"] for k in ("defect_cluster", "low_sales_single")
+               for b in first.answer_key["planted"][k]}  # fmt: skip
+    assert "prd_0102" not in planted  # 실제 클레임이 있는 책은 심지 않는다
+    assert first.answer_key["existing_non_synthetic"]["products_with_claims"] == 1
+    with db.tx() as conn:
+        top = conn.execute("SELECT MAX(change_seq) FROM buyers").fetchone()[0]
+    _run(db, replace=True)
+    assert _real_rows(db, real["buyer"]) == before
+    with db.tx() as conn:
+        low = conn.execute(f"SELECT MIN(change_seq) FROM buyers WHERE {gen_where()}").fetchone()[0]
+        orders = conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
+        counter = conn.execute("SELECT value FROM counters WHERE name = 'order'").fetchone()[0]
+    assert low > top  # 고객 내보내기 커서가 다시 지운 뒤 넣은 회원을 읽는다
+    # 번호표: 실제 1건 + 가상 두 번(첫 번째는 지웠다). 다음 주문은 그 다음 번호다
+    assert counter == 1 + 2 * (orders - 1)
+    assert Shop(db).create_order("buy_0001", [("prd_0101", 1)])["order_id"] == (
+        f"ord_{counter + 1:04d}"
+    )
+
+
+def test_memory_db_is_refused_unless_dry_run() -> None:
+    assert gen.main(["--db", ":memory:", "--members", "10"]) == 1
+
+
+def test_list_users_real_only_and_traffic_skips_synthetic(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    from ax_shop_api.main import create_app
+    from ax_shop_api.storefront import Storefront
+
+    db = _db(tmp_path / "u.db")
+    _run(db)
+    every = Storefront(db).list_users()
+    assert len(every) == 30 + MEMBERS
+    real = Storefront(db).list_users(real_only=True)
+    assert [u["buyer_id"] for u in real] == [f"buy_{n:04d}" for n in range(1, 31)]
+    assert len(Storefront(db).list_users(real_only=True, limit=5)) == 5
+    client = TestClient(create_app(db))
+    data = client.get("/api/shop/users?real_only=true&limit=1000").json()["data"]
+    assert len(data) == 30
+    assert client.get("/api/shop/users?limit=5000").status_code == 422
+
+    script = Path(__file__).resolve().parents[2] / "scripts" / "shop_traffic.py"
+    spec = importlib.util.spec_from_file_location("shop_traffic_for_synth", script)
+    assert spec and spec.loader
+    traffic = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(traffic)
+    paths = []
+
+    def call(method, path, body=None, token=None):
+        paths.append(path)
+        res = client.request(method, path, json=body)
+        return res.status_code, res.json()
+
+    buyers = traffic.order_buyers(call)
+    assert paths == ["/api/shop/users?real_only=true&limit=1000"]
+    assert buyers and not any(synthetic_ids.is_synthetic(b) for b in buyers)
+    leaked = traffic.order_buyers(lambda *a, **k: (200, {"data": [{"buyer_id": "buy_100001"}]}))
+    assert leaked == []  # 서버가 옛 버전이라 다 줘도 가상 회원은 고르지 않는다

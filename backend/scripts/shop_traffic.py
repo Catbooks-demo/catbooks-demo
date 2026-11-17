@@ -117,6 +117,22 @@ def call(
         return error.code, json.loads(error.read() or b"{}")
 
 
+USERS_PATH = "/api/shop/users?real_only=true&limit=1000"
+SYNTHETIC_FROM = 100_001  # 가상 회원 구간(ax_shop_api.synthetic_ids). 여기에는 주문을 넣지 않는다
+
+
+def order_buyers(call: Call) -> list[str]:
+    """주문을 넣을 구매자: 시드·실제 가입자만(가상 회원은 서버가 빼고 여기서 한 번 더 뺀다)."""
+    _, users = call("GET", USERS_PATH)
+    out = []
+    for user in users.get("data", []):
+        buyer = str(user.get("buyer_id", ""))
+        number = buyer.removeprefix("buy_")
+        if number.isdigit() and int(number) < SYNTHETIC_FROM:
+            out.append(buyer)
+    return out
+
+
 class StockWatch:
     """재고 경고·대기 로그·자동 보충. 로그는 `log`로 내보낸다(기본 print)."""
 
@@ -391,9 +407,8 @@ def main() -> int:
         time.sleep(STOCK_CHECK_EVERY_S)
     while True:
         try:
-            _, users = call("GET", "/api/shop/users")
+            buyers = order_buyers(call)
             _, products = call("GET", "/api/shop/products")
-            buyers = [u["buyer_id"] for u in users.get("data", [])]
             items = watch.check(products.get("data", []))
             if buyers and items:
                 picked = rng.sample(items, k=min(len(items), rng.choice([1, 1, 2])))

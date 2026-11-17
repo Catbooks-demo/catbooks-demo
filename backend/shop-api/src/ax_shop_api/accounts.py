@@ -3,7 +3,8 @@
 - 비밀번호는 scrypt로 해시해 저장한다(`scrypt$n$r$p$솔트$해시`). 원문은 어디에도 남기지 않는다.
 - 로그인 토큰은 무작위 값이고 DB에는 sha256 16진만 둔다. 토큰 원문은 가입·로그인 응답에만 나간다.
 - 이메일은 `strip().lower()`로 맞춰 저장·비교한다.
-- 새 구매자 ID는 `buy_` + 기존 ID의 최대 번호 + 1(4자리 이상)이다.
+- 새 구매자 ID는 `buy_` + 기존 ID의 최대 번호 + 1(4자리 이상)이다. 가상 회원 구간(`buy_100001`~,
+  `synthetic_ids`)은 세지 않는다(가상 회원을 넣거나 지워도 가입 번호가 겹치지 않는다).
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from ax_shop_api import retention
 from ax_shop_api.db import TENANT_ID, Db
 from ax_shop_api.inquiries import BUYER_ID
 from ax_shop_api.service import ShopError
+from ax_shop_api.synthetic_ids import BUYER_WHERE as SYNTHETIC_BUYER_WHERE
 from ax_shop_api.synthetic_ids import SYNTHETIC_BUYER_FROM
 
 AGE_BANDS: tuple[str, ...] = ("10s", "20s", "30s", "40s", "50s_plus")
@@ -166,7 +168,9 @@ def _session_days() -> int:
 def _next_buyer_id(conn: sqlite3.Connection) -> str:
     """가입자 번호는 가상 회원 구간(`synthetic_ids`) 아래에서만 센다(가상 회원과 겹치지 않게)."""
     top = 0
-    for row in conn.execute("SELECT buyer_id FROM buyers"):
+    # 가상 회원 5만 명을 파이썬으로 훑지 않게 SQL에서 먼저 뺀다(번호 확인은 아래에서 한 번 더)
+    sql = f"SELECT buyer_id FROM buyers WHERE NOT {SYNTHETIC_BUYER_WHERE}"  # noqa: S608 - 상수
+    for row in conn.execute(sql):
         found = BUYER_ID.match(row["buyer_id"])
         if found and int(found.group(1)) < SYNTHETIC_BUYER_FROM:
             top = max(top, int(found.group(1)))

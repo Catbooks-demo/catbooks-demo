@@ -8,8 +8,8 @@
     cd backend
     SHOP_DB_PATH=.data/shop.db uv run python scripts/gen_synthetic.py --dry-run
     SHOP_DB_PATH=.data/shop.db uv run python scripts/gen_synthetic.py [--members 50000]
-        [--seed 20261115] [--end 2026-11-15] [--trend-start 2026-10-08] [--out ./synthetic-out]
-        [--replace]
+        [--seed 20261115] [--end 2026-11-15] [--trend-start 2026-10-08]
+        [--out ~/catbooks-synthetic-out] [--replace]
 
 - 기간: 끝 날짜(`--end`, 기본 오늘(한국 시간) 하루 전)까지 90일. 모든 시각은 과거이고 마지막 1시간
   안의 기록은 없다(결제 감시가 반응하지 않게).
@@ -19,8 +19,9 @@
   아무도 모르는 값의 scrypt 해시 하나를 같이 쓴다(로그인할 수 없다).
 - 이미 가상 회원이 있으면 멈춘다. `--replace`는 가상 회원 구간의 행과 그에 딸린 행만 지우고(재고는
   되돌린다) 다시 넣는다. 지우기·넣기가 한 트랜잭션이다.
-- 정답지(`answer_key.json`)와 회원 표(`member_personas.csv`)는 `--out`(기본 `./synthetic-out`,
-  커밋 안 함)에만 쓴다. DB·저장소에는 쓰지 않는다. `--dry-run`은 계산만 하고 아무것도 쓰지 않는다.
+- 정답지(`answer_key.json`)와 회원 표(`member_personas.csv`)는 `--out`(기본
+  `~/catbooks-synthetic-out`, 저장소 밖)에 커밋 전에 쓴다. DB·저장소에는 쓰지 않는다.
+  `--dry-run`은 계산만 하고 아무것도 쓰지 않는다.
 - 환불은 만들지 않는다. 판매 서버 규칙상 환불은 고객지원이 클레임을 판정한 뒤에만 한다. 그래서
   클레임은 모두 "접수됨"(AXcellent가 읽어 갈 차례)으로 넣는다. 취소는 결제 전 취소만 있다
   (결제된 주문은 환불 API 없이 취소하지 않는다).
@@ -31,7 +32,6 @@ from __future__ import annotations
 import argparse
 import bisect
 import csv
-import hashlib
 import json
 import math
 import random
@@ -46,11 +46,14 @@ from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from ax_shop_api import db as db_module
 from ax_shop_api import synthetic_ids
 from ax_shop_api.accounts import AGE_BANDS, GENDERS, OCCUPATIONS, hash_password
 from ax_shop_api.claim_inbox import digest as claim_digest
 from ax_shop_api.db import TENANT_ID, Db
 from ax_shop_api.genres import GENRES
+from ax_shop_api.inquiries import digest as inquiry_digest
+from ax_shop_api.lookups import MIN_GROUP_BUYERS
 from ax_shop_api.service import FREE_SHIPPING_FROM, PROMISED_DELIVERY_DAYS, SHIPPING_FEE
 from ax_shop_api.support_client import CLAIM_CONTEXT_PREFIX
 
@@ -58,7 +61,7 @@ KST = timezone(timedelta(hours=9))
 WINDOW_DAYS = 90
 DEFAULT_SEED = 20261115
 DEFAULT_MEMBERS = 50_000
-DEFAULT_OUT = Path("synthetic-out")
+DEFAULT_OUT = Path.home() / "catbooks-synthetic-out"  # 저장소 밖(정답지는 로컬 전용)
 TREND_LEAD_DAYS = 38  # 트렌드 시작 = 끝 날짜 − 38일 (11/15 끝이면 10/8)
 NEW_MEMBER_SHARE = 0.10  # 기간 안에 가입한 회원
 JITTER = 0.30  # 회원마다 ±30%
@@ -167,7 +170,6 @@ DEFECT_REASONS = ("defect", "damaged", "wrong_item", "missing_item")  # 고객�
 EVIDENCE_REASONS = ("defect", "damaged", "wrong_item")  # 화면이 사진을 요구하는 사유
 # CRX-001(재무)·book_issue_stats(고객지원)가 보는 기준
 CRX_MIN_SOLD, CRX_MIN_RATE, CRX_MIN_CLAIMS, CRX_MIN_DEFECTS = 5, 0.10, 2, 3
-MIN_GROUP_BUYERS = 5  # 판매 집계가 숫자를 숨기는 묶음 크기(lookups.MIN_GROUP_BUYERS)
 
 
 @dataclass(frozen=True)
@@ -538,6 +540,7 @@ class Inquiry:
     subject: str
     message: str
     created: datetime
+    digest: str = ""
 
 
 @dataclass
@@ -774,8 +777,25 @@ def load_products(conn: sqlite3.Connection, replace: bool, dry_run: bool) -> lis
 
 
 def _counter(conn: sqlite3.Connection, name: str) -> int:
+    """`db.next_id`가 다음에 줄 번호 − 1. 번호표가 없으면 `SHOP_ID_START`(있으면)부터 시작한다."""
     row = conn.execute("SELECT value FROM counters WHERE name = ?", (name,)).fetchone()
-    return row[0] if row else 0
+    if row:
+        return row[0]
+    start = getattr(db_module, "id_start", lambda: 1)()
+    return start - 1
+
+
+def _advance(
+    db: Db, conn: sqlite3.Connection, name: str, prefix: str, base: int, used: int
+) -> None:
+    """번호표를 `used`개만큼 넘긴다. 첫 번호는 `db.next_id`로 받아 계획한 번호와 맞춰 본다."""
+    if not used:
+        return
+    first = db.next_id(conn, name, prefix)
+    if first != f"{prefix}{base + 1:04d}":
+        raise RuntimeError(f"{name} 번호가 계산할 때와 달라요({first}). 다시 돌려 주세요")
+    if used > 1:
+        conn.execute("UPDATE counters SET value = value + ? WHERE name = ?", (used - 1, name))
 
 
 # --- 상품 고르기 ----------------------------------------------------------------------------
@@ -989,6 +1009,10 @@ class Simulation:
     stock_start: dict[str, int] = field(default_factory=dict)
     sold_out_at: dict[str, datetime] = field(default_factory=dict)
     claims_adjusted: int = 0  # 심지 않은 책이 걸리지 않게 사유를 바꾸거나 뺀 클레임
+    id_bases: dict[str, int] = field(default_factory=dict)  # 번호표의 시작(다음 번호 − 1)
+    existing: dict[str, Any] = field(default_factory=dict)  # 기간 안의 가상이 아닌 기록
+    # 가상이 아닌 클레임: (상품, 접수 시각, 수량, 사유). 심기 후보에서 빼고 기준 계산에 더한다
+    real_claims: list[tuple[str, datetime, int, str]] = field(default_factory=list)
 
 
 def _shift_holiday(moment: datetime, rng: Rng) -> datetime:
@@ -1244,7 +1268,16 @@ def plant_claim_books(sim: Simulation, rng: Rng) -> set[str]:
             continue
         for i, line in enumerate(o.lines):
             delivered[line.product.product_id].append((o, i))
-    books = [p for p in sim.products if p.category == "book" and p.genre != TREND_GENRE]
+    # 장르 없는 책(시드 prd_0001~0008 등)과 실제 클레임이 있는 책은 심지 않는다
+    blocked = {pid for pid, *_ in sim.real_claims}
+    books = [
+        p
+        for p in sim.products
+        if p.category == "book"
+        and p.genre in BOOK_GENRES
+        and p.genre != TREND_GENRE
+        and p.product_id not in blocked
+    ]
 
     def eligible(pid: str) -> list[tuple[Order, int]]:
         seen, out = set(), []
@@ -1423,6 +1456,12 @@ def random_claims(sim: Simulation, rng: Rng, exclude: set[str]) -> int:
     window = sim.window
     planted_orders = {id(c.order) for c in sim.claims}
     guard = _CrxGuard(sim)
+    for pid, at, qty, reason in sim.real_claims:  # 실제 클레임도 기준 계산에 넣는다
+        for period in guard._periods(at):
+            c = guard.seen[period][pid]
+            c["claims"] += 1
+            c["qty"] += qty
+            c["defect"] += int(reason in DEFECT_REASONS)
     adjusted = 0
     for order in sim.orders:
         if order.delivered is None or order.forced or id(order) in planted_orders:
@@ -1544,6 +1583,7 @@ def simulate(
     sim = Simulation(window, members, products, shelf)
     sim.norms = calibrate_trend(members)
     _catalog_warnings(sim)
+    load_existing(conn, sim)
     times = order_times(members, window, Rng(f"{seed}:times"))
     log(f"주문 {len(times):,}건 조립 중(재고·결제·배송)…")
     next_order, next_payment = _counter(conn, "order"), _counter(conn, "payment")
@@ -1554,7 +1594,69 @@ def simulate(
     sim.claims.sort(key=lambda c: (c.created, c.order.order_id))
     reviews_and_inquiries(sim, Rng(f"{seed}:after"), _counter(conn, "review"))
     sim.inquiries.sort(key=lambda q: (q.created, q.order.order_id))
+    seen: set[str] = set()
+    kept = []
+    for q in sim.inquiries:  # 쇼핑몰 문의 지문(같은 10분 창의 같은 글은 한 건)
+        q.digest = inquiry_digest(
+            q.order.member.buyer_id, q.order.order_id, q.subject, q.message,
+            lambda q=q: q.created.timestamp(),
+        )  # fmt: skip
+        if q.digest not in seen:
+            seen.add(q.digest)
+            kept.append(q)
+    sim.inquiries = kept
+    sim.id_bases = {"order": next_order, "payment": next_payment,
+                    "review": _counter(conn, "review")}  # fmt: skip
     return sim
+
+
+def load_existing(conn: sqlite3.Connection, sim: Simulation) -> None:
+    """가상이 아닌 주문·클레임(기간 안)을 센다. 정답지 숫자에는 들어가지 않으니 경고로 알린다."""
+    w = sim.window
+    lo, hi = _stamp(w.start_utc), _stamp(w.end_utc)
+    real = f"NOT {synthetic_ids.BUYER_WHERE}"
+    orders = conn.execute(
+        f"SELECT COUNT(*), SUM(status = 'paid') FROM orders WHERE {real} "  # noqa: S608
+        "AND created_at >= ? AND created_at < ?",
+        (lo, hi),
+    ).fetchone()
+    product_of = {}
+    lines_of: dict[str, list[tuple[str, int]]] = defaultdict(list)
+    claimed_lines = (
+        "SELECT i.rowid, i.order_id, i.product_id, i.qty FROM order_items i "
+        f"WHERE i.order_id IN (SELECT order_id FROM claim_inbox WHERE {real})"  # noqa: S608
+    )
+    for r in conn.execute(claimed_lines):
+        product_of[r[0]] = (r[2], r[3])
+        lines_of[r[1]].append((r[2], r[3]))
+    claims_in_window = 0
+    for c in conn.execute(
+        f"SELECT order_id, reason, items, created_at FROM claim_inbox WHERE {real}"  # noqa: S608
+    ):
+        at = datetime.fromisoformat(c["created_at"].replace("Z", "+00:00"))
+        claims_in_window += lo <= c["created_at"] < hi
+        if c["items"]:
+            picked = []
+            for item in json.loads(c["items"]):
+                ref = str(item.get("order_item_id", "")).removeprefix("oit_")
+                if ref.isdigit() and int(ref) in product_of:
+                    picked.append((product_of[int(ref)][0], int(item.get("qty") or 1)))
+        else:
+            picked = lines_of.get(c["order_id"], [])
+        for pid, qty in picked:
+            sim.real_claims.append((pid, at, qty, c["reason"]))
+    sim.existing = {
+        "orders_in_window": orders[0] or 0,
+        "paid_orders_in_window": orders[1] or 0,
+        "claims_in_window": claims_in_window,
+        "products_with_claims": len({pid for pid, *_ in sim.real_claims}),
+    }
+    if sim.existing["orders_in_window"] or sim.existing["claims_in_window"]:
+        sim.warnings.append(
+            f"기간 안에 가상이 아닌 주문 {sim.existing['orders_in_window']:,}건·클레임 "
+            f"{sim.existing['claims_in_window']:,}건이 이미 있어요. AXcellent 집계에는 함께 "
+            "잡히지만 정답지 숫자에는 들어가지 않아요(클레임 있는 책은 심기에서 뺐어요)"
+        )
 
 
 def _catalog_warnings(sim: Simulation) -> None:
@@ -1762,6 +1864,7 @@ def answer_key(sim: Simulation, config: Config, now: datetime) -> dict[str, Any]
             "timezone_for_days": "Asia/Seoul (KST)",
         },
         "warnings": sim.warnings,
+        "existing_non_synthetic": sim.existing,
         "catalog": {
             "active_products": len(sim.products),
             "products_by_genre": {g: len(sim.shelf.by_genre.get(g, [])) for g in GENRES}
@@ -1805,6 +1908,9 @@ def answer_key(sim: Simulation, config: Config, now: datetime) -> dict[str, Any]
             "delivered": len(delivered),
             "late_deliveries": sum(1 for o in delivered if o.late),
             "orders_dropped_all_sold_out": sim.dropped,
+            "paid_not_delivered_at_cutoff": sum(
+                1 for o in sim.orders if o.status == "paid" and o.delivered is None
+            ),
         },
         "by_day": [
             {"date": d.isoformat(), **{k: v for k, v in sorted(by_day[d].items())}} for d in w.days
@@ -1900,6 +2006,8 @@ def answer_key(sim: Simulation, config: Config, now: datetime) -> dict[str, Any]
         },
         "planted": {
             "crx_001_rule": "(같은 기간 판매 ≥5 그리고 클레임 수량/판매 ≥10% 그리고 클레임 ≥2) 또는 불량 클레임 ≥3",  # noqa: E501
+            "crx_evaluated_as_of": _stamp(w.end_utc),
+            "crx_note": "끝 날짜 기준. 그 뒤 클레임(AXcellent 처리·새 실제 클레임)이 생기면 바뀐다",
             "defect_cluster": sim.planted.get("defect_cluster", []),
             "low_sales_single": sim.planted.get("low_sales_single", []),
             "incidental_trips": [{"product_id": pid, **crx[pid]} for pid in incidental],
@@ -2008,9 +2116,13 @@ def member_rows(sim: Simulation) -> list[dict[str, Any]]:
 
 
 # --- DB 쓰기 ----------------------------------------------------------------------------------
-def write(conn: sqlite3.Connection, sim: Simulation, log: Callable[[str], None]) -> None:
+def write(
+    db: Db, conn: sqlite3.Connection, sim: Simulation, seq_floor: int, log: Callable[[str], None]
+) -> None:
     password = hash_password(secrets.token_urlsafe(32))  # 아무도 모르는 값: 로그인할 수 없다
-    base_seq = conn.execute("SELECT COALESCE(MAX(change_seq), 0) FROM buyers").fetchone()[0]
+    # 바뀐 순서는 지운 가상 회원의 번호보다도 커야 한다(--replace 뒤 고객 내보내기가 다시 읽게)
+    current = conn.execute("SELECT COALESCE(MAX(change_seq), 0) FROM buyers").fetchone()[0]
+    base_seq = max(seq_floor, current)
     log(f"회원 {len(sim.members):,}명 넣는 중…")
     buyers, accounts = [], []
     for n, m in enumerate(sim.members, start=1):
@@ -2152,8 +2264,7 @@ def write(conn: sqlite3.Connection, sim: Simulation, log: Callable[[str], None])
     for q in sim.inquiries:
         buyer = q.order.member.buyer_id
         stamp = _stamp(q.created)
-        basis = "".join((buyer, q.order.order_id, q.subject, q.message, stamp or ""))
-        key = hashlib.sha256(basis.encode("utf-8")).hexdigest()
+        key = q.digest
         conn.execute(
             "INSERT INTO inquiry_inbox(digest, context_id, buyer_id, customer_name, order_id,"
             " subject, message, images, tenant_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?,"
@@ -2186,17 +2297,12 @@ def write(conn: sqlite3.Connection, sim: Simulation, log: Callable[[str], None])
             for r in sim.reviews
         ],
     )
-    for name, used in (
-        ("order", len(sim.orders)),
-        ("payment", len(payments)),
-        ("review", len(sim.reviews)),
+    for name, prefix, used in (
+        ("order", "ord_", len(sim.orders)),
+        ("payment", "pay_", len(payments)),
+        ("review", "rev_", len(sim.reviews)),
     ):
-        if used:
-            conn.execute(
-                "INSERT INTO counters(name, value) VALUES (?, ?) "
-                "ON CONFLICT(name) DO UPDATE SET value = value + ?",
-                (name, used, used),
-            )
+        _advance(db, conn, name, prefix, sim.id_bases[name], used)
 
 
 @dataclass
@@ -2208,8 +2314,13 @@ class Result:
     written: bool
 
 
-def generate(db: Db, config: Config, log: Callable[[str], None] = print) -> Result:
-    """계산하고(dry-run이 아니면) 한 트랜잭션에 넣는다. 가상 회원이 이미 있으면 멈춘다."""
+def generate(
+    db: Db, config: Config, log: Callable[[str], None] = print, out: Path | None = None
+) -> Result:
+    """계산하고(dry-run이 아니면) 한 트랜잭션에 넣는다. 가상 회원이 이미 있으면 멈춘다.
+
+    `out`을 주면 정답지·회원 표를 커밋 전에 쓴다(쓰다가 실패하면 DB도 되돌린다).
+    """
     now = (config.now or datetime.now(UTC)).astimezone(UTC).replace(microsecond=0)
     deleted = None
     with db.tx() as conn:
@@ -2220,6 +2331,7 @@ def generate(db: Db, config: Config, log: Callable[[str], None] = print) -> Resu
             raise SyntheticExistsError(
                 f"가상 회원이 이미 {existing:,}명 있어요. 다시 넣으려면 --replace를 주세요"
             )
+        seq_floor = conn.execute("SELECT COALESCE(MAX(change_seq), 0) FROM buyers").fetchone()[0]
         if existing and not config.dry_run:
             log(f"이미 있는 가상 회원 {existing:,}명과 딸린 행을 지우는 중…")
             deleted = delete_synthetic(conn)
@@ -2227,14 +2339,17 @@ def generate(db: Db, config: Config, log: Callable[[str], None] = print) -> Resu
         sim = simulate(conn, config, now, log)
         key = answer_key(sim, config, now)
         rows = member_rows(sim)
+        result = Result(sim, key, rows, deleted, not config.dry_run)
         if not config.dry_run:
-            write(conn, sim, log)
+            write(db, conn, sim, seq_floor, log)
             outbox_after = conn.execute("SELECT COUNT(*) FROM outbox_events").fetchone()[0]
             if outbox_after != outbox_before:
                 raise RuntimeError(
                     "outbox 행이 늘었어요. 되돌려요(가상 데이터는 이벤트를 내지 않아요)"
                 )
-    return Result(sim, key, rows, deleted, not config.dry_run)
+            if out is not None:  # 정답지를 못 쓰면 DB도 되돌린다(정답지 없는 데이터를 남기지 않게)
+                write_outputs(result, out)
+    return result
 
 
 def summary(result: Result) -> str:
@@ -2306,6 +2421,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--members는 1 이상이어야 해요")
     db = Db(args.db)
     if not db.is_file:
+        if not args.dry_run:
+            print("DB가 메모리(:memory:)라 넣을 곳이 없어요. SHOP_DB_PATH나 --db로 파일을 주세요",
+                  file=sys.stderr)  # fmt: skip
+            return 1
         print("주의: DB가 메모리(:memory:)예요. SHOP_DB_PATH나 --db로 파일을 주세요")
     config = Config(
         members=args.members,
@@ -2316,7 +2435,7 @@ def main(argv: list[str] | None = None) -> int:
         dry_run=args.dry_run,
     )
     try:
-        result = generate(db, config)
+        result = generate(db, config, out=None if args.dry_run else args.out)
     except SyntheticExistsError as error:
         print(error, file=sys.stderr)
         return 2
@@ -2327,7 +2446,6 @@ def main(argv: list[str] | None = None) -> int:
         print("지운 행: " + ", ".join(f"{k}={v}" for k, v in result.deleted.items() if v))
     print(summary(result))
     if not args.dry_run:
-        write_outputs(result, args.out)
         print(f"정답지: {args.out.resolve() / 'answer_key.json'} (로컬 전용, 커밋·공유 금지)")
     return 0
 
