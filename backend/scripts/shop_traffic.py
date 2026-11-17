@@ -2,6 +2,8 @@
 실제 모드 실행(`run_all.sh`)이 함께 띄운다.
 
 시드 구매자 중 한 명이 판매 중인 상품을 골라 주문하고 카드로 결제한다.
+가상 회원으로 하루 흐름을 넣는 `scripts/gen_synthetic_daily.py`가 이 스크립트의 주문을 대신한다.
+그 스크립트를 쓰는 서버에서는 이 스크립트를 끈다(shop-api README 4-5).
 결제 성공·실패는 이 스크립트가 정하지 않는다. 쇼핑몰에 결제 장애가 주입돼 있으면
 결제 서버가 5xx로 실패시키고, 쇼핑몰 감시가 그걸 재서
 `shop.degraded`를 낸다. 그래서 장애 대응 사건이 실제 주문·결제 기록에서 시작한다.
@@ -405,11 +407,17 @@ def main() -> int:
         except (urllib.error.URLError, OSError, KeyError, ValueError) as error:
             print(f"{now()} 재고 확인 오류: {error}", file=sys.stderr, flush=True)
         time.sleep(STOCK_CHECK_EVERY_S)
+    no_buyer_logged = 0.0
     while True:
         try:
             buyers = order_buyers(call)
             _, products = call("GET", "/api/shop/products")
             items = watch.check(products.get("data", []))
+            if not buyers and time.monotonic() - no_buyer_logged >= WAIT_LOG_EVERY_S:
+                # 시드 구매자를 지운 서버(scripts/clean_seed.py)에는 고를 구매자가 없다.
+                # 멈추지 않고 1분마다 알린다(가상 주문은 scripts/gen_synthetic_daily.py가 넣는다)
+                no_buyer_logged = time.monotonic()
+                _print(f"{now()} 주문할 구매자(시드·실제 가입자)가 없어 대기 중")
             if buyers and items:
                 picked = rng.sample(items, k=min(len(items), rng.choice([1, 1, 2])))
                 status, order = call(

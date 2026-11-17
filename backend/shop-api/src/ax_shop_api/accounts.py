@@ -25,6 +25,7 @@ from typing import Any
 from ax_shop_api import retention
 from ax_shop_api.db import TENANT_ID, Db
 from ax_shop_api.inquiries import BUYER_ID
+from ax_shop_api.seed import BUYER_COUNT as SEED_BUYER_COUNT
 from ax_shop_api.service import ShopError
 from ax_shop_api.synthetic_ids import BUYER_WHERE as SYNTHETIC_BUYER_WHERE
 from ax_shop_api.synthetic_ids import SYNTHETIC_BUYER_FROM
@@ -166,8 +167,12 @@ def _session_days() -> int:
 
 
 def _next_buyer_id(conn: sqlite3.Connection) -> str:
-    """가입자 번호는 가상 회원 구간(`synthetic_ids`) 아래에서만 센다(가상 회원과 겹치지 않게)."""
-    top = 0
+    """가입자 번호는 가상 회원 구간(`synthetic_ids`) 아래에서만 센다(가상 회원과 겹치지 않게).
+
+    시드 데모 구매자 번호(`buy_0001`~`buy_0030`)는 지운 뒤에도(`scripts/clean_seed.py`) 다시 주지
+    않는다. AXcellent 쪽에 남은 시드 구매자 기록과 새 가입자가 섞이지 않게 한다.
+    """
+    top = SEED_BUYER_COUNT
     # 가상 회원 5만 명을 파이썬으로 훑지 않게 SQL에서 먼저 뺀다(번호 확인은 아래에서 한 번 더)
     sql = f"SELECT buyer_id FROM buyers WHERE NOT {SYNTHETIC_BUYER_WHERE}"  # noqa: S608 - 상수
     for row in conn.execute(sql):

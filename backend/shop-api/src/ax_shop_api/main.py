@@ -254,6 +254,7 @@ class DeliveredIn(BaseModel):
 
 
 class ReviewIn(BaseModel):
+    buyer_id: str | None = None  # 비우면 로그인 토큰의 구매자(보내면 같아야 한다, admin은 대신하기)
     order_id: str
     rating: int = Field(ge=1, le=5)
     body: str = Field(min_length=BODY_MIN, max_length=BODY_MAX)
@@ -922,8 +923,9 @@ def create_app(
 
     @app.post("/api/shop/products/{product_id}/reviews", status_code=201)
     async def post_review(product_id: str, body: ReviewIn, request: Request) -> dict:
-        """배송이 끝난 내 주문의 상품에 후기를 쓴다(구매자 토큰). 주문·상품마다 한 번."""
-        buyer_id = _buyer(request)
+        """배송이 끝난 내 주문의 상품에 후기를 쓴다(구매자 토큰, 또는 admin + `buyer_id`).
+        주문·상품마다 한 번."""
+        buyer_id = _buyer(request, body.buyer_id)
         created = await asyncio.to_thread(
             review_service.create, buyer_id, product_id, body.order_id, body.rating, body.body
         )
