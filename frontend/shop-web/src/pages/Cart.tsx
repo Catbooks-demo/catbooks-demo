@@ -17,7 +17,7 @@ export default function CartPage() {
         <ul className="divide-y divide-ink-100 rounded-xl border border-ink-100 bg-surface">
           {cart.lines.map((l) => (
             <li key={l.id} className="flex gap-4 p-4">
-              <Link href={`/products/${l.id}`} className="w-20 shrink-0"><Cover title={l.title} hue={hueOf(l.id)} category={l.category} productId={l.id} compact /></Link>
+              <Link href={`/products/${l.id}`} className="w-20 shrink-0"><Cover title={l.title} hue={hueOf(l.id)} category={l.category} productId={l.id} coverUrl={l.cover} compact /></Link>
               <div className="min-w-0 flex-1">
                 <Link href={`/products/${l.id}`} className="line-clamp-2 break-keep text-sm font-semibold hover:underline">{l.title}</Link>
                 <div className="mt-2 flex items-center gap-3">

@@ -123,7 +123,7 @@ export function ShopShell({ children }: { children: ReactNode }) {
           </div>
           <div>
             <p className="font-semibold text-ink-700">데모 안내</p>
-            <p className="mt-1 leading-relaxed">상품(가격·재고 포함)은 데모용 가상 데이터이며 실제로 판매하지 않습니다. 도서 정보(제목·저자·출판사·소개)는 도서관 정보나루에서 가져왔습니다. 취소·반품·교환 신청은 고객지원이 판정합니다.</p>
+            <p className="mt-1 leading-relaxed">상품(가격·재고 포함)은 데모용 가상 데이터이며 실제로 판매하지 않습니다. 도서 정보(제목·저자·출판사·소개)와 표지는 도서관 정보나루(국립중앙도서관)에서 가져왔고, 표지 그림은 원래 주소에서 바로 보여 줍니다. 취소·반품·교환 신청은 고객지원이 판정합니다.</p>
           </div>
         </div>
         <nav aria-label="약관" className="mx-auto flex max-w-6xl gap-4 px-4 pb-6">

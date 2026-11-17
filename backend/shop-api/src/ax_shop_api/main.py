@@ -84,6 +84,8 @@ class BookInfoIn(BaseModel):
     publisher: str | None = Field(default=None, max_length=book_info.PUBLISHER_MAX)
     genre_code: str | None = None  # `genres.GENRES`의 코드 하나(아니면 422), 비우면 모름
     description: str | None = Field(default=None, max_length=book_info.DESCRIPTION_MAX)
+    # 표지 그림 주소(http·https, 500자까지, 아니면 422). 웹이 원래 주소로 보여 주기만 한다
+    cover_url: str | None = None
 
     @field_validator("genre_code", mode="before")
     @classmethod
@@ -95,6 +97,15 @@ class BookInfoIn(BaseModel):
     def _isbn(cls, value: Any) -> Any:
         return (
             book_info.normalize_isbn13(value) if isinstance(value, str) or value is None else value
+        )
+
+    @field_validator("cover_url", mode="before")
+    @classmethod
+    def _cover(cls, value: Any) -> Any:
+        return (
+            book_info.normalize_cover_url(value)
+            if isinstance(value, str) or value is None
+            else value
         )
 
     @field_validator("author", "publisher", "description", mode="before")
@@ -1106,6 +1117,7 @@ def create_app(
             "publisher",
             "genre_code",
             "description",
+            "cover_url",
         ):  # 보냈으면 null도 "지움"이다
             if key in body.model_fields_set:
                 changes[key] = getattr(body, key)

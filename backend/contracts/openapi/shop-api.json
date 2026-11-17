@@ -974,6 +974,17 @@
             "title": "Category Code",
             "type": "string"
           },
+          "cover_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Url"
+          },
           "description": {
             "anyOf": [
               {
@@ -1074,6 +1085,17 @@
               }
             ],
             "title": "Author"
+          },
+          "cover_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Url"
           },
           "description": {
             "anyOf": [
@@ -1353,6 +1375,17 @@
           "category_code": {
             "title": "Category Code",
             "type": "string"
+          },
+          "cover_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Url"
           },
           "description": {
             "anyOf": [

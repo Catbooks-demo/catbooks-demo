@@ -62,6 +62,8 @@ def _book_row(item: dict) -> dict:
             : book_info.DESCRIPTION_MAX
         ]
         or None,
+        # 표지 주소: http·https만, 어긋나면 버린다(표지 없음). 그림 자체는 받지 않는다
+        "cover_url": book_info.safe_cover_url(item.get("cover_url")),
         "seller_id": _pick(isbn, BOOK_SELLERS),
     }
 
@@ -84,6 +86,7 @@ def _stationery_row(item: dict) -> dict:
             : book_info.DESCRIPTION_MAX
         ]
         or None,
+        "cover_url": None,
         "seller_id": _pick(name, STATIONERY_SELLERS),
     }
 
@@ -121,11 +124,12 @@ def load_catalog(db: Db, catalog_dir: Path = CATALOG_DIR, dry_run: bool = False)
                 conn.execute(
                     "INSERT INTO products (product_id, seller_id, name, category_code, price, "
                     "stock, active, tenant_id, context_id, created_at, updated_at, isbn13, author, "
-                    "publisher, genre_code, description) "
-                    "VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
+                    "publisher, genre_code, description, cover_url) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (product_id, row["seller_id"], row["name"], row["category_code"],
                      row["price"], row["stock"], TENANT_ID, now, now, row["isbn13"],
-                     row["author"], row["publisher"], row["genre_code"], row["description"]),
+                     row["author"], row["publisher"], row["genre_code"], row["description"],
+                     row["cover_url"]),
                 )  # fmt: skip
     return counts
 

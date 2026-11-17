@@ -74,7 +74,7 @@ shop-api에 아직 없어서 화면에서 오류 대신 "준비 중" 안내를 �
 - 1:1 문의 내역 조회(접수는 가능), 구매 후기
 
 ### 상품 표지 사진
-상품 표지는 `shop-web/public/covers/<product_id>.jpg`(예: `prd_0001.jpg`, png·webp도 됨)에 파일을 두면 사진으로 나오고, 파일이 없거나 불러오지 못하면 상품마다 색으로 만든 제목 카드(`Cover.tsx`)로 돌아간다. 비율은 책 3:4, 문구·굿즈 1:1로 잘리므로 같은 비율로 준비한다. 사진은 상업적으로 써도 되는 라이선스(직접 촬영, Unsplash·Pexels·Pixabay 등)만 쓰고, 출처와 라이선스는 PR 설명에 적는다.
+상품에 `cover_url`(도서관 정보나루 표지 주소)이 있으면 그 주소에서 바로 불러온다(`loading="lazy"`, `referrerPolicy="no-referrer"`). 제공처 조건상 원래 주소로 보여 주기만 하고 받기·저장·프록시하지 않으며, 상세 화면 표지 아래와 하단에 출처를 적는다(자세히는 `backend/shop-api/README.md` 4-3). 주소가 없거나 불러오지 못하면 `shop-web/public/covers/<product_id>.jpg`(예: `prd_0001.jpg`, png·webp도 됨)에 파일을 두면 사진으로 나오고, 파일이 없거나 불러오지 못하면 상품마다 색으로 만든 제목 카드(`Cover.tsx`)로 돌아간다. 비율은 책 3:4, 문구·굿즈 1:1로 잘리므로 같은 비율로 준비한다. 사진은 상업적으로 써도 되는 라이선스(직접 촬영, Unsplash·Pexels·Pixabay 등)만 쓰고, 출처와 라이선스는 PR 설명에 적는다.
 
 ## 4. common-frontend
 `@dejafix/common-frontend`를 git 태그(`git+https://github.com/DejaFix/common-frontend.git#v0.1.0`)로 설치해 두었다.
