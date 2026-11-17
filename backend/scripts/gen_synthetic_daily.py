@@ -23,7 +23,10 @@
   주문에 문의를 낸다. 결제 장애로 실패한 회원 일부는 결제 실패 문의를 남긴다(옛 `shop_traffic`처럼).
 - 다시 켜도 안전: 날마다 계획·진행을 `--out/daily_state/<날짜>.json`에 적는다. 주문은 날짜·순번으로
   만든 멱등 키를 보내 다시 보내도 서버가 처음 주문을 돌려준다(두 번 넣지 않는다).
-- 정답지: 하루가 끝나면 `--out/daily_answer_key.jsonl`에 그날 한 줄(계획한 장르·페르소나 합계,
+- 유입 출처: 주문마다 `src_source`·`src_medium`·`src_campaign`을 붙인다(직접 40%·네이버 검색 25%·
+  유튜브 15%·인스타그램 10%·기타 10%, AI·IT 트렌드 때 유튜브 몫이 트렌드 배수만큼 커진다).
+  (시드, 날짜, 순번)으로 정해 계획에 적어 두므로 다시 켜도 같은 값을 보낸다.
+- 정답지: 하루가 끝나면 `--out/daily_answer_key.jsonl`에 그날 한 줄(계획한 장르·페르소나·출처 합계,
   트렌드 단계·배수, 실제로 넣은 건수)을 더한다. 로컬 전용이고 저장소·DB에 넣지 않는다.
 - 되채우기 정답지(`--out/answer_key.json`)와 가상 회원이 없으면 멈춘다(회원을 같은 시드로 다시
   만들어 DB의 회원과 맞춰 본다). 같은 `--out`에 두 번째 프로세스가 뜨면 잠금 파일로 멈춘다.
@@ -94,6 +97,20 @@ DEFAULT_RESTOCK_LEAD_H = 24.0
 STOCK_FILE = "daily_stock.json"
 LOCK_FILE = "daily.lock"
 CRX_DAYS = 30
+# 유입 출처(utm_source, utm_medium, 평소 몫). 데이터팀이 정한 가정 비율이다. 페르소나별 기울기는
+# 두지 않는다(그날 합계가 이 비율에 그대로 수렴해야 정답지로 쓰기 쉽다)
+SOURCE_MIX = (
+    ("direct", "none", 0.40),
+    ("naver", "search", 0.25),
+    ("youtube", "video", 0.15),
+    ("instagram", "social", 0.10),
+    ("other", "referral", 0.10),
+)
+SOURCE_MEDIUM = {source: medium for source, medium, _share in SOURCE_MIX}
+TREND_SOURCE = "youtube"  # 트렌드 배수(`trend_multiple`)만큼 가중치가 커지고 나머지는 다시 나눈다
+TREND_CAMPAIGN = "ai_it_trend"  # 트렌드 기간의 유튜브·인스타그램 주문에만 붙는 캠페인 표시
+CAMPAIGN_SOURCES = frozenset({"youtube", "instagram"})
+CAMPAIGN_PHASES = frozenset({"rising", "peak", "decay"})
 
 Call = Callable[..., tuple[int, dict]]
 
@@ -262,6 +279,50 @@ def day_info(model: Model, day: date) -> dict[str, Any]:
     }
 
 
+def source_mix(info: dict[str, Any]) -> dict[str, float]:
+    """그날 출처 몫. 평소 몫에서 유튜브만 트렌드 배수를 곱하고 합이 1이 되게 다시 나눈다
+    (최고점 ×4.1이면 유튜브 0.15×4.1 / (0.85 + 0.615) ≈ 42%)."""
+    multiple = float(info.get("trend_multiple") or 1.0)
+    weights = {
+        source: share * (multiple if source == TREND_SOURCE else 1.0)
+        for source, _medium, share in SOURCE_MIX
+    }
+    total = sum(weights.values())
+    return {source: w / total for source, w in weights.items()}
+
+
+def pick_source(seed: int, day: str, k: int, info: dict[str, Any]) -> list[str | None]:
+    """주문 한 건의 `[src_source, src_medium, src_campaign]`. (시드, 날짜, 순번)으로 정해 늘 같다.
+
+    계획의 다른 뽑기와 따로 된 난수열이라 출처를 붙여도 장바구니·결제 계획은 그대로다.
+    캠페인은 트렌드(rising·peak·decay) 때의 유튜브·인스타그램에만 붙고 나머지는 비운다.
+    """
+    rng = gen.Rng(f"{seed}:daily:{day}:{k}:src")
+    source = rng.pick(source_mix(info).items())
+    campaign = (
+        TREND_CAMPAIGN
+        if source in CAMPAIGN_SOURCES and info.get("trend_phase") in CAMPAIGN_PHASES
+        else None
+    )
+    return [source, SOURCE_MEDIUM[source], campaign]
+
+
+def source_tally(slots: list[dict[str, Any]]) -> dict[str, Any]:
+    """출처별 주문 수·몫과 캠페인별 수(출처가 없는 옛 계획의 주문은 `unknown`)."""
+    by_source = Counter((s.get("src") or ["unknown"])[0] for s in slots)
+    campaigns = Counter(s["src"][2] for s in slots if s.get("src") and s["src"][2])
+    total = sum(by_source.values())
+    return {
+        "by_source": dict(sorted(by_source.items(), key=lambda kv: (-kv[1], kv[0]))),
+        "source_shares": {
+            k: round(v / total, 4) for k, v in sorted(by_source.items(), key=lambda kv: kv[0])
+        }
+        if total
+        else {},
+        "by_campaign": dict(sorted(campaigns.items())),
+    }
+
+
 def to_products(rows: list[dict]) -> list[gen.Product]:
     return [
         gen.Product(
@@ -411,6 +472,7 @@ def plan_day(model: Model, day: date, products: list[gen.Product]) -> list[dict[
                 "lines": [[p.product_id, qty, p.genre] for p, qty in lines],
                 **_payment_plan(srng),
                 "inquiry_on_fail": srng.random() < FAILED_PAY_INQUIRY,
+                "src": pick_source(model.seed, day.isoformat(), k, info),
                 "status": "planned",
             }
         )
@@ -428,6 +490,7 @@ def plan_summary(slots: list[dict[str, Any]]) -> dict[str, Any]:
         "units_by_genre": dict(units.most_common()),
         "cancel_before_pay": sum(1 for s in slots if s["pay"] == "cancel"),
         "first_payment_declined": sum(1 for s in slots if s["pay"].startswith("decline")),
+        **source_tally(slots),
     }
 
 
@@ -700,6 +763,8 @@ class Daily:
             "items": [{"product_id": pid, "qty": qty} for pid, qty, _g in slot["attempt"]],
             "idempotency_key": f"{IDEMPOTENCY_PREFIX}:{state['date']}:{slot['k']}",
         }
+        if slot.get("src"):  # 계획에 적어 둔 출처(다시 보내도 같은 값)
+            body.update(zip(("src_source", "src_medium", "src_campaign"), slot["src"], strict=True))
         status, res = self.call("POST", "/api/shop/orders", body)
         if status in (200, 201):
             return res["data"]
@@ -716,8 +781,11 @@ class Daily:
             if not lines:
                 slot["status"] = "dropped"
                 return
+            if "src" not in slot:  # 출처가 없던 옛 계획: 같은 (시드, 날짜, 순번)으로 정해 적는다
+                slot["src"] = pick_source(state["seed"], state["date"], slot["k"], state["info"])
             slot["attempt"], slot["status"] = lines, "placing"
-            self._save_day(state)  # 보낸 줄을 먼저 적는다(다시 켜면 같은 줄로 다시 보낸다)
+            # 보낸 줄·출처를 먼저 적는다(다시 켜면 같은 줄·출처로 다시 보낸다)
+            self._save_day(state)
         if slot["status"] == "placing":
             order = self._place(state, slot)
             if order is None and slot["status"] == "placing":  # 그 사이 품절: 한 번 다시 고른다
@@ -874,9 +942,11 @@ class Daily:
                 "days_since_start": info["trend_days_since_start"],
             },
             "day_factor": round(info["factor"], 4),
-            "planned": state["planned"],
+            "source_mix": {k: round(v, 4) for k, v in source_mix(info).items()},
+            "planned": {**source_tally(slots), **state["planned"]},
             "actual": {
                 "placed": len(placed),
+                **source_tally(placed),
                 "by_status": dict(Counter(s.get("result") for s in placed).most_common()),
                 "units_by_genre": dict(units.most_common()),
                 "by_slot_status": dict(Counter(s["status"] for s in slots).most_common()),
