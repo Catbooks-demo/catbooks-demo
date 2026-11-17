@@ -14,6 +14,19 @@ from contextlib import contextmanager
 
 from ax_contracts.schemas.common import TENANT_ID_DEFAULT
 
+ID_START_ENV = "SHOP_ID_START"
+
+
+def id_start() -> int:
+    """새 번호표의 첫 번호. 1 이상 정수가 아니면 1."""
+    raw = (os.getenv(ID_START_ENV) or "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 1
+    return value if value >= 1 else 1
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sellers (
   seller_id TEXT PRIMARY KEY, name TEXT NOT NULL, category_codes TEXT NOT NULL,
@@ -302,11 +315,16 @@ class Db:
                 raise
 
     def next_id(self, conn: sqlite3.Connection, name: str, prefix: str) -> str:
-        """`prefix + 4자리 이상 순번`. 접두사 규칙은 CLAUDE.md ID 표를 따른다."""
+        """`prefix + 4자리 이상 순번`. 접두사 규칙은 CLAUDE.md ID 표를 따른다.
+
+        번호표가 아직 없으면 `SHOP_ID_START`(기본 1)에서 시작한다. 새 DB로 바꿀 때 예전 DB의
+        번호(다른 부서 기록에 남은 `ord_0001` 등)와 겹치지 않게 크게 시작하는 데 쓴다.
+        이미 있는 번호표는 그대로 이어 간다(기존 DB에는 영향 없음).
+        """
         conn.execute(
-            "INSERT INTO counters(name, value) VALUES (?, 1) "
+            "INSERT INTO counters(name, value) VALUES (?, ?) "
             "ON CONFLICT(name) DO UPDATE SET value = value + 1",
-            (name,),
+            (name, id_start()),
         )
         value = conn.execute("SELECT value FROM counters WHERE name = ?", (name,)).fetchone()[0]
         return f"{prefix}{value:04d}"
