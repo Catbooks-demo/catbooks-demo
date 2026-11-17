@@ -2429,10 +2429,36 @@ def summary(result: Result) -> str:
     return "\n".join(lines)
 
 
+BACKFILL_EXTRA = "backfill_extra.json"  # 매일 모드가 이어 쓰는 값(정답지와 따로 둔다)
+
+
+def backfill_extra(sim: Simulation) -> dict[str, Any]:
+    """매일 모드(`gen_synthetic_daily.py`)가 이어 쓰는 값: 장르별 인기 순위(상품 번호 순서)와
+    상품별 클레임(접수 시각·수량·사유, CRX-001 막기용), 심어 둔 클레임 책."""
+    pools = sim.shelf.pools
+    claims = [
+        [c.order.lines[i].product.product_id, _stamp(c.created), c.order.lines[i].qty, c.reason]
+        for c in sim.claims
+        for i in c.lines
+    ]
+    return {
+        "note": "가상 데이터 되채우기 부가 값(로컬 전용). 저장소·DB에 넣지 않는다.",
+        "shelf_ranks": {key: [p.product_id for p in pool[0]] for key, pool in pools.items()},
+        "claims": claims,
+        "planted": {
+            key: [p["product_id"] for p in sim.planted.get(key, [])]
+            for key in ("defect_cluster", "low_sales_single")
+        },
+    }
+
+
 def write_outputs(result: Result, out: Path) -> None:
     out.mkdir(parents=True, exist_ok=True)
     (out / "answer_key.json").write_text(
         json.dumps(result.answer_key, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (out / BACKFILL_EXTRA).write_text(
+        json.dumps(backfill_extra(result.simulation), ensure_ascii=False), encoding="utf-8"
     )
     rows = result.members_csv
     with (out / "member_personas.csv").open("w", encoding="utf-8-sig", newline="") as f:

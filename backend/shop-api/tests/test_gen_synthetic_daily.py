@@ -6,6 +6,7 @@
 import importlib.util
 import json
 import sys
+from collections import Counter
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -33,6 +34,7 @@ DAY = date(2026, 11, 17)
 MEMBERS = 4000
 ADMIN = {"Authorization": "Bearer mock:admin"}
 KEY = "synthetic-daily:%"
+ONE_STOCK = "SELECT stock FROM products WHERE product_id = 'prd_0105'"
 
 
 def _kst(day: date, hour: int, minute: int = 0) -> datetime:
@@ -304,3 +306,215 @@ def test_refuses_without_backfill(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert daily.main(["--out", str(tmp_path), "--once"]) == 1
     monkeypatch.setenv("SHOP_ADMIN_TOKEN", "x")
     assert daily.main(["--out", str(tmp_path / "nothing"), "--once"]) == 2
+
+
+def _flaky(client: TestClient, bad: dict, status: int):
+    """`bad["on"]`이면 쓰기(POST·PATCH)에 `status`로 답한다(토큰 문제·제한·서버 오류 흉내)."""
+    good = _call(client)
+
+    def call(method, path, body=None):
+        if bad["on"] and method in ("POST", "PATCH"):
+            return status, {"error": {"code": "X"}}
+        return good(method, path, body)
+
+    return call
+
+
+@pytest.mark.parametrize("status", [401, 403, 429, 503])
+def test_retryable_errors_leave_work_pending(world, status: int) -> None:
+    db, client, model, out = world
+    bad = {"on": False}
+    clock = [_kst(DAY, 0, 1)]
+    runner = daily.Daily(
+        _flaky(client, bad, status), model, out, clock=lambda: clock[0], log=lambda _: None,
+        max_per_tick=50,
+    )  # fmt: skip
+    runner.tick()
+    bad["on"] = True
+    clock[0] = _kst(DAY, 23, 59)
+    runner.tick()  # 쓰기가 모두 거부된다: 끝난 것으로 적지 않는다
+    slots = _state(out)["slots"]
+    live = [s for s in slots if s["status"] != "before_start"]
+    assert live and not any(s["status"] in ("dropped", "done") for s in live)
+    assert not _daily_orders(db)
+    followups = json.loads((out / "daily_followups.json").read_text(encoding="utf-8"))
+    assert not followups["done"]  # 발송·도착 표시도 다음 차례로
+    bad["on"] = False
+    for _ in range(5):
+        runner.tick()
+    slots = _state(out)["slots"]
+    assert all(s["status"] in daily.TERMINAL for s in slots)
+    assert len(_daily_orders(db)) == sum(1 for s in slots if s.get("order_id")) > 0
+    with db.tx() as conn:
+        marked = conn.execute(
+            f"SELECT COUNT(*) FROM orders WHERE {synthetic_ids.BUYER_WHERE} "  # noqa: S608
+            "AND delivered_at > ?",
+            (daily._stamp(model.cutoff),),
+        ).fetchone()[0]
+    assert marked > 0  # 되채우기의 미도착 주문이 다음 차례에 도착으로 적혔다
+
+
+def test_low_stock_is_restocked_after_the_lead_time(world) -> None:
+    db, _client, _model, _out = world
+    with db.tx() as conn:
+        conn.execute("UPDATE products SET stock = 3 WHERE product_id = 'prd_0105'")
+    clock = [_kst(DAY, 0, 1)]
+    runner = _runner(world, clock, max_per_tick=1)
+    runner.tick()
+    with db.tx() as conn:
+        stock = conn.execute(ONE_STOCK).fetchone()[0]
+    assert stock <= 3  # 기준 아래로 둔다(품절이 잠깐은 보인다)
+    clock[0] = _kst(DAY + timedelta(days=1), 0, 30)
+    runner.tick()
+    with db.tx() as conn:
+        stock = conn.execute(ONE_STOCK).fetchone()[0]
+    assert stock == daily.RESTOCK_TO
+
+
+def test_daily_picks_skip_sold_out_and_keep_a_stable_rank(world) -> None:
+    _db_, client, model, _out = world
+    products = _products(client)
+    assert model.ranks  # 되채우기 순위를 이어 쓴다
+    novel = [p for p in products if p.genre == "novel"]
+    order = [p.product_id for p in daily.DailyShelf.order("novel", novel, model.seed, model.ranks)]
+    assert order == model.ranks["novel"]  # 되채우기 때 있던 상품은 그 순서 그대로
+    new = gen.Product("prd_0999", "sel_0001", "새 소설", "book", 15000, 50, "novel")
+    grown = daily.DailyShelf.order("novel", [*novel, new], model.seed, model.ranks)
+    assert [p.product_id for p in grown if p.product_id != "prd_0999"] == order
+    shrunk = daily.DailyShelf.order("novel", novel[1:], model.seed, model.ranks)
+    assert [p.product_id for p in shrunk] == [pid for pid in order if pid != novel[0].product_id]
+    # 같은 번호의 새 상품은 순위 목록이 없어도 늘 같은 자리
+    again = daily.DailyShelf.order("novel", [*novel, new], model.seed, {})
+    assert again == daily.DailyShelf.order("novel", [new, *novel], model.seed, {})
+    stock = {p.product_id: (0 if p.genre == "it" and p.ai_title else p.stock) for p in products}
+    shelf = daily.DailyShelf(products, model.seed, model.ranks, stock)
+    rng = gen.Rng("t")
+    picks = {shelf.pick("it", rng, 1.0).product_id for _ in range(200)}
+    assert not {p.product_id for p in products if p.ai_title} & picks  # 품절 트렌드 책은 안 고른다
+
+
+def test_crx_guard_changes_or_skips_claims_on_unplanted_books(world) -> None:
+    _db_, client, model, out = world
+    runner = _runner(world, [NOW])
+    now = _kst(DAY, 12)
+    order = {"items": [{"order_item_id": "oit_0001", "product_id": "prd_0103", "qty": 1}]}
+    claim = {"items": [{"order_item_id": "oit_0001", "qty": 1}], "reason": "defect"}
+    sold = Counter({"prd_0103": 10})
+    data = {"done": {}, "claims": []}
+    assert runner._crx_reason(claim, order, data, sold, now) == "defect"
+    data["claims"] = [["prd_0103", daily._stamp(now - timedelta(days=2)), 1, "defect"]]
+    # 두 번째 클레임이면 (판매 10, 수량 20%, 2건)으로 걸린다: 변심으로 바꿔도 걸리니 내지 않는다
+    assert runner._crx_reason(claim, order, data, sold, now) is None
+    data["claims"] = [["prd_0103", daily._stamp(now - timedelta(days=40)), 1, "defect"]]
+    assert runner._crx_reason(claim, order, data, sold, now) == "defect"  # 30일 밖은 세지 않는다
+    big = Counter({"prd_0103": 100})
+    data["claims"] = [["prd_0103", daily._stamp(now - timedelta(days=1)), 1, "damaged"]] * 2
+    assert runner._crx_reason(claim, order, data, big, now) == "change_of_mind"  # 불량 3건 막기
+    planted = next(iter(model.planted))
+    order["items"][0]["product_id"] = planted
+    assert runner._crx_reason(claim, order, data, sold, now) == "defect"  # 심은 책은 그대로
+    # 클레임 기록은 처음에 되채우기 클레임으로 채운다
+    loaded = runner._load_followups(model.cutoff + timedelta(days=1))
+    assert loaded["claims"] and len(loaded["claims"]) <= len(model.backfill_claims)
+
+
+def test_first_day_after_backfill_spreads_the_missed_morning(world) -> None:
+    _db_, _client, model, out = world
+    first = model.cutoff.astimezone(gen.KST).date()  # 되채우기 끝 다음 날(11/16)
+    clock = [_kst(first, 15)]
+    runner = _runner(world, clock, max_per_tick=50)
+    runner.tick()
+    slots = _state(out, first)["slots"]
+    assert not any(s["status"] == "before_start" for s in slots)
+    deferred = [s for s in slots if s.get("deferred")]
+    assert deferred and all(daily._parse(s["next_at"]) > clock[0] for s in deferred)
+    assert max(daily._parse(s["next_at"]) for s in deferred) <= _kst(first + timedelta(days=1), 0)
+
+
+def test_corrupt_state_is_moved_aside_and_rebuilt(world) -> None:
+    _db_, _client, _model, out = world
+    clock = [_kst(DAY, 0, 1)]
+    _runner(world, clock).tick()
+    path = out / "daily_state" / f"{DAY}.json"
+    path.write_text('{"date": "2026-11-', encoding="utf-8")
+    (out / "daily_followups.json").write_text("{", encoding="utf-8")
+    _runner(world, clock).tick()
+    assert json.loads(path.read_text(encoding="utf-8"))["date"] == DAY.isoformat()
+    assert list((out / "daily_state").glob(f"{DAY}.json.corrupt-*"))
+    assert list(out.glob("daily_followups.json.corrupt-*"))
+
+
+def test_second_process_is_refused_by_the_lock(tmp_path: Path) -> None:
+    lock = daily.InstanceLock(tmp_path / "daily.lock")
+    with pytest.raises(daily.DailyError):
+        daily.InstanceLock(tmp_path / "daily.lock")
+    lock.release()
+    daily.InstanceLock(tmp_path / "daily.lock").release()
+
+
+def test_check_members_tolerates_a_deleted_member(world) -> None:
+    _db_, client, model, _out = world
+    good = _call(client)
+    gone = model.members[0].buyer_id
+
+    def call(method, path, body=None):
+        if path.endswith(f"/users/{gone}"):
+            return 404, {"error": {"code": "BUYER_NOT_FOUND"}}
+        return good(method, path, body)
+
+    daily.check_members(call, model)  # 한 명이 지워져도 시작한다
+
+
+def test_answer_lines_skip_torn_lines_and_never_repeat_a_day(world) -> None:
+    _db_, _client, _model, out = world
+    (out / "daily_answer_key.jsonl").write_text('{"date": "2026-11-1', encoding="utf-8")
+    clock = [_kst(DAY, 0, 1)]
+    runner = _runner(world, clock, max_per_tick=50)
+    runner.tick()
+    clock[0] = _kst(DAY, 23, 59)
+    runner.tick()
+    clock[0] = _kst(DAY + timedelta(days=1), 0, 30)
+    runner.tick()
+    state = _state(out)
+    state["finalized"] = False  # 적은 뒤 상태를 저장하기 전에 꺼진 것처럼
+    (out / "daily_state" / f"{DAY}.json").write_text(json.dumps(state), encoding="utf-8")
+    runner.tick()
+    rows = []
+    for raw in (out / "daily_answer_key.jsonl").read_text(encoding="utf-8").splitlines():
+        try:
+            rows.append(json.loads(raw))
+        except ValueError:
+            continue
+    assert [r["date"] for r in rows] == [DAY.isoformat()]
+
+
+@pytest.mark.parametrize("deliver_real", [True, False])
+def test_human_orders_get_shop_traffic_delivery_marks(world, deliver_real: bool) -> None:
+    db, client, model, out = world
+    res = client.post(
+        "/api/shop/orders",
+        json={"buyer_id": "buy_0005", "items": [{"product_id": "prd_0101", "qty": 1}]},
+        headers=ADMIN,
+    )
+    oid = res.json()["data"]["order_id"]
+    paid = client.post(f"/api/shop/orders/{oid}/payments", json={}, headers=ADMIN).json()["data"]
+    clock = [daily._parse(paid["created_at"]) + timedelta(days=4)]
+    runner = daily.Daily(
+        _call(client), model, out, clock=lambda: clock[0], log=lambda _: None,
+        deliver_real=deliver_real,
+    )  # fmt: skip
+    runner.tick()
+    order = client.get(f"/api/shop/orders/{oid}", headers=ADMIN).json()["data"]
+    if not deliver_real:
+        assert order["delivered_at"] is None
+        return
+    paid_at = daily._parse(paid["payments"][0]["created_at"])
+    shipped, arrived = daily.real_delivery_plan(oid, paid_at)
+    assert order["shipped_at"] == daily._stamp(shipped)
+    assert order["delivered_at"] == daily._stamp(arrived)
+    with db.tx() as conn:  # 사람 주문에는 클레임·후기·문의를 내지 않는다
+        assert not conn.execute(
+            "SELECT 1 FROM claim_inbox WHERE order_id = ? UNION SELECT 1 FROM reviews "
+            "WHERE order_id = ?",
+            (oid, oid),
+        ).fetchone()

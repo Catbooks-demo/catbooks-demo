@@ -17,6 +17,8 @@
 - outbox 이벤트는 지우지 않는다(이미 보냈거나 보낼 사건 기록이다. 보유기간 삭제가 치운다).
 - 지운 시드 구매자 번호는 새 가입자에게 다시 주지 않는다(`accounts._next_buyer_id`).
 - `--dry-run`은 같은 삭제를 해 본 뒤 되돌려 건수만 보여 준다. DB가 `:memory:`면 멈춘다.
+- 시드가 아닌 판매 중 상품이 하나도 없으면(실제 책을 아직 안 넣었으면) 멈춘다. 지우면 팔 상품이 없는
+  쇼핑몰이 된다. 순서는 `load_catalog` → 이 스크립트 → 되채우기 → 매일 모드다. `--force`로 넘긴다.
 """
 
 from __future__ import annotations
@@ -35,6 +37,10 @@ SEED_SELLER_IDS = tuple(s[0] for s in SELLERS)
 
 class _DryRun(Exception):
     """건수만 얻고 되돌린다."""
+
+
+class NoCatalogError(ValueError):
+    """시드가 아닌 판매 중 상품이 없다(`--force`로 넘긴다)."""
 
 
 def _marks(values: tuple[str, ...]) -> str:
@@ -123,7 +129,7 @@ def clean(conn: sqlite3.Connection) -> dict[str, Any]:
     return counts
 
 
-def run(db: Db, *, apply: bool) -> dict[str, Any]:
+def run(db: Db, *, apply: bool, force: bool = False) -> dict[str, Any]:
     """한 트랜잭션. `apply=False`면 같은 삭제를 해 본 뒤 되돌린다."""
     if not db.is_file:
         raise ValueError("DB가 메모리(:memory:)라 지울 것이 없다. SHOP_DB_PATH나 --db로 준다")
@@ -131,6 +137,16 @@ def run(db: Db, *, apply: bool) -> dict[str, Any]:
     try:
         with db.tx() as conn:
             conn.execute("BEGIN IMMEDIATE")  # 세는 동안 다른 쓰기가 끼지 않게
+            marks = _marks(SEED_PRODUCT_IDS)
+            real = conn.execute(
+                f"SELECT COUNT(*) FROM products WHERE active = 1 AND product_id NOT IN ({marks})",  # noqa: S608
+                SEED_PRODUCT_IDS,
+            ).fetchone()[0]
+            if not real and not force:
+                raise NoCatalogError(
+                    "시드가 아닌 판매 중 상품이 없다. load_catalog로 실제 책을 먼저 넣는다"
+                    "(--force로 넘긴다)"
+                )
             counts = clean(conn)
             if not apply:
                 raise _DryRun
@@ -143,10 +159,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="시드 데모 상품·구매자와 딸린 행을 지운다")
     parser.add_argument("--db", help="DB 파일(기본 SHOP_DB_PATH)")
     parser.add_argument("--dry-run", action="store_true", help="건수만 보고 되돌린다")
+    parser.add_argument("--force", action="store_true", help="실제 상품이 없어도 지운다")
     args = parser.parse_args(argv)
     db = Db(args.db)
     try:
-        counts = run(db, apply=not args.dry_run)
+        counts = run(db, apply=not args.dry_run, force=args.force)
     except ValueError as error:
         print(error, file=sys.stderr)
         return 1

@@ -180,7 +180,12 @@ def test_removes_seed_rows_and_keeps_the_rest(tmp_path: Path) -> None:
 def test_signups_never_reuse_seed_numbers(tmp_path: Path) -> None:
     db = Db(str(tmp_path / "shop.db"))
     seed(db)
-    clean_seed.run(db, apply=True)
+    with pytest.raises(clean_seed.NoCatalogError):  # 실제 상품이 없으면 지우지 않는다
+        clean_seed.run(db, apply=True)
+    assert clean_seed.main(["--db", str(tmp_path / "shop.db")]) == 1
+    with db.tx() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM buyers").fetchone()[0] == 30
+    clean_seed.run(db, apply=True, force=True)
     client = TestClient(create_app(db))
     res = client.post(
         "/api/shop/auth/signup",
