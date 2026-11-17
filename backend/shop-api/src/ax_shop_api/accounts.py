@@ -25,6 +25,7 @@ from ax_shop_api import retention
 from ax_shop_api.db import TENANT_ID, Db
 from ax_shop_api.inquiries import BUYER_ID
 from ax_shop_api.service import ShopError
+from ax_shop_api.synthetic_ids import SYNTHETIC_BUYER_FROM
 
 AGE_BANDS: tuple[str, ...] = ("10s", "20s", "30s", "40s", "50s_plus")
 GENDERS: tuple[str, ...] = ("female", "male", "no_answer")
@@ -163,10 +164,11 @@ def _session_days() -> int:
 
 
 def _next_buyer_id(conn: sqlite3.Connection) -> str:
+    """가입자 번호는 가상 회원 구간(`synthetic_ids`) 아래에서만 센다(가상 회원과 겹치지 않게)."""
     top = 0
     for row in conn.execute("SELECT buyer_id FROM buyers"):
         found = BUYER_ID.match(row["buyer_id"])
-        if found:
+        if found and int(found.group(1)) < SYNTHETIC_BUYER_FROM:
             top = max(top, int(found.group(1)))
     return f"buy_{top + 1:04d}"
 

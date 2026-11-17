@@ -24,3 +24,6 @@ dist/
 
 # 도서관 정보나루 응답 캐시 (backend/scripts/seed_books.py, 키는 담지 않는다)
 backend/.cache/
+
+# 가상 데이터 정답지 (backend/scripts/gen_synthetic.py --out, 로컬 전용)
+synthetic-out/
