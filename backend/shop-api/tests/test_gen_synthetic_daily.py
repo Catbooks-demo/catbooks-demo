@@ -148,6 +148,8 @@ def test_plan_is_deterministic_for_seed_and_date(world) -> None:
         assert synthetic_ids.is_synthetic(slot["buyer_id"])
         assert _kst(DAY, 0) <= daily._parse(slot["at"]) < _kst(DAY + timedelta(days=1), 0)
         assert slot["lines"] and all(qty in (1, 2) for _p, qty, _g in slot["lines"])
+        source, medium, _campaign = slot["src"]
+        assert daily.SOURCE_MEDIUM[source] == medium
     small = {m.buyer_id for m in model.members if m.persona is gen.SMALL_GROUP}
     assert not small & {s["buyer_id"] for s in first}
     # 트렌드 곡선은 기간 뒤에도 이어지고(최고점 뒤 반감) 결국 평소로 돌아온다
@@ -275,6 +277,18 @@ def test_day_closes_with_one_answer_line_and_orders_get_delivered(world) -> None
     assert row["planned"]["orders"] == len(_state(out)["slots"])
     assert row["trend"]["phase"] == "decay" and row["actual"]["placed"] == len(_daily_orders(db))
     assert sum(row["planned"]["units_by_genre"].values()) > 0
+    # 출처별 수·몫(계획·실제)과 그날의 가정 비율
+    assert sum(row["planned"]["by_source"].values()) == row["planned"]["orders"]
+    assert sum(row["actual"]["by_source"].values()) == row["actual"]["placed"]
+    assert abs(sum(row["source_mix"].values()) - 1) < 1e-3
+    with db.tx() as conn:
+        tagged = Counter(
+            r[0]
+            for r in conn.execute(
+                "SELECT src_source FROM orders WHERE idempotency_key LIKE ?", (KEY,)
+            )
+        )
+    assert dict(tagged) == row["actual"]["by_source"]
     # 엿새 뒤에는 결제된 가상 주문(되채우기의 미도착 주문 포함)이 발송·도착으로 적힌다
     clock[0] = _kst(DAY + timedelta(days=7), 12)
     for _ in range(5):
@@ -518,3 +532,95 @@ def test_human_orders_get_shop_traffic_delivery_marks(world, deliver_real: bool)
             "WHERE order_id = ?",
             (oid, oid),
         ).fetchone()
+
+
+def _shares(model, info: dict, n: int = 20000) -> tuple[dict[str, float], Counter]:
+    picks = [daily.pick_source(model.seed, DAY.isoformat(), k, info) for k in range(n)]
+    sources = Counter(p[0] for p in picks)
+    return {k: v / n for k, v in sources.items()}, Counter(p[2] for p in picks)
+
+
+def test_source_shares_follow_the_mix_and_youtube_rises_with_the_trend(world) -> None:
+    _db_, _client, model, _out = world
+    base = daily.day_info(model, DAY + timedelta(days=120))
+    assert base["trend_phase"] == "baseline"
+    shares, campaigns = _shares(model, base)
+    for source, _medium, share in daily.SOURCE_MIX:
+        assert abs(shares[source] - share) < 0.015, source
+    assert campaigns == Counter({None: 20000})  # 평소에는 캠페인 표시가 없다
+    peak = daily.day_info(model, model.trend_start + timedelta(days=21))
+    assert peak["trend_phase"] == "peak"
+    hot, campaigns = _shares(model, peak)
+    youtube = 0.15 * (1 + daily.TREND_SOURCE_LIFT * (gen.TREND_PEAK - 1))
+    expected = youtube / (0.85 + youtube)  # 약 25%
+    assert 0.24 < expected < 0.26
+    assert abs(hot["youtube"] - expected) < 0.015
+    assert hot["youtube"] > shares["youtube"] + 0.07
+    # 나머지는 비율을 지킨 채 줄어든다
+    assert abs(hot["direct"] / hot["naver"] - 0.40 / 0.25) < 0.15
+    tagged = campaigns[daily.TREND_CAMPAIGN]
+    assert tagged == round((hot["youtube"] + hot["instagram"]) * 20000)
+    # (시드, 날짜, 순번)이 같으면 같은 출처
+    assert daily.pick_source(model.seed, "2026-11-17", 7, peak) == daily.pick_source(
+        model.seed, "2026-11-17", 7, peak
+    )
+
+
+def test_orders_carry_the_planned_source_and_a_replay_sends_the_same(world) -> None:
+    db, client, model, out = world
+    sent: list[dict] = []
+    good = _call(client)
+
+    def call(method, path, body=None):
+        if method == "POST" and path == "/api/shop/orders":
+            sent.append(body)
+        return good(method, path, body)
+
+    clock = [_kst(DAY, 0, 1)]
+    runner = daily.Daily(
+        call, model, out, clock=lambda: clock[0], log=lambda _: None, max_per_tick=50
+    )
+    runner.tick()
+    clock[0] = _kst(DAY, 23, 59)
+    runner.tick()
+    state = _state(out)
+    rows = {o["order_id"]: o for o in _daily_orders(db)}
+    placed = [s for s in state["slots"] if s.get("order_id")]
+    assert placed
+    for slot in placed:
+        row = rows[slot["order_id"]]
+        assert [row["src_source"], row["src_medium"], row["src_campaign"]] == slot["src"]
+    # 보낸 뒤 적기 전에 꺼진 것처럼 되돌리면 같은 출처로 다시 보낸다(멱등 키로 같은 주문)
+    slot = placed[0]
+    slot["status"] = "placing"
+    oid = slot.pop("order_id")
+    (out / "daily_state" / f"{DAY}.json").write_text(json.dumps(state), encoding="utf-8")
+    sent.clear()
+    again = daily.Daily(call, model, out, clock=lambda: clock[0], log=lambda _: None)
+    again.tick()
+    replay = [b for b in sent if b["idempotency_key"].endswith(f":{slot['k']}")]
+    assert replay
+    assert [replay[0][k] for k in ("src_source", "src_medium", "src_campaign")] == slot["src"]
+    assert _state(out)["slots"][slot["k"]]["order_id"] == oid
+
+
+def test_old_plans_without_a_source_get_one_before_placing(world) -> None:
+    db, _client, model, out = world
+    clock = [_kst(DAY, 0, 1)]
+    runner = _runner(world, clock, max_per_tick=50)
+    runner.tick()
+    path = out / "daily_state" / f"{DAY}.json"
+    state = _state(out)
+    for slot in state["slots"]:  # 출처를 붙이기 전 버전이 세운 계획
+        slot.pop("src")
+    path.write_text(json.dumps(state), encoding="utf-8")
+    clock[0] = _kst(DAY, 23, 59)
+    runner.tick()
+    rows = {o["order_id"]: o for o in _daily_orders(db)}
+    placed = [s for s in _state(out)["slots"] if s.get("order_id")]
+    assert placed
+    for slot in placed:
+        expected = daily.pick_source(model.seed, DAY.isoformat(), slot["k"], state["info"])
+        assert slot["src"] == expected
+        row = rows[slot["order_id"]]
+        assert [row["src_source"], row["src_medium"], row["src_campaign"]] == expected
