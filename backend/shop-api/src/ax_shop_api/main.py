@@ -254,6 +254,7 @@ class DeliveredIn(BaseModel):
 
 
 class ReviewIn(BaseModel):
+    buyer_id: str | None = None  # 비우면 로그인 토큰의 구매자(보내면 같아야 한다, admin은 대신하기)
     order_id: str
     rating: int = Field(ge=1, le=5)
     body: str = Field(min_length=BODY_MIN, max_length=BODY_MAX)
@@ -857,12 +858,19 @@ def create_app(
         return {"data": {"status": "ok"}, "meta": {}}
 
     @app.get("/api/shop/users")
-    async def list_users(request: Request) -> dict:
-        """구매자 목록은 `admin` 토큰만. `legacy`에서 토큰 없이 부르면 옛 동작대로 준다."""
+    async def list_users(
+        request: Request,
+        real_only: bool = False,
+        limit: Annotated[int | None, Query(ge=1, le=1000)] = None,
+    ) -> dict:
+        """구매자 목록은 `admin` 토큰만. `legacy`에서 토큰 없이 부르면 옛 동작대로 준다.
+
+        `real_only=true`면 가상 회원(`buy_100001`~)을 빼고, `limit`명(최대 1000)까지 준다.
+        """
         authorization = request.headers.get("authorization")
         if not (_buyer_auth_legacy() and _bearer(authorization) is None):
             _caller(INJECT_ALLOWED)(request, authorization)
-        return _ok(storefront.list_users())
+        return _ok(storefront.list_users(real_only, limit))
 
     @app.get("/api/shop/users/{buyer_id}")
     async def get_user(buyer_id: str, request: Request) -> dict:
@@ -915,8 +923,9 @@ def create_app(
 
     @app.post("/api/shop/products/{product_id}/reviews", status_code=201)
     async def post_review(product_id: str, body: ReviewIn, request: Request) -> dict:
-        """배송이 끝난 내 주문의 상품에 후기를 쓴다(구매자 토큰). 주문·상품마다 한 번."""
-        buyer_id = _buyer(request)
+        """배송이 끝난 내 주문의 상품에 후기를 쓴다(구매자 토큰, 또는 admin + `buyer_id`).
+        주문·상품마다 한 번."""
+        buyer_id = _buyer(request, body.buyer_id)
         created = await asyncio.to_thread(
             review_service.create, buyer_id, product_id, body.order_id, body.rating, body.body
         )
