@@ -6894,8 +6894,38 @@
     },
     "/api/shop/users": {
       "get": {
-        "description": "구매자 목록은 `admin` 토큰만. `legacy`에서 토큰 없이 부르면 옛 동작대로 준다.",
+        "description": "구매자 목록은 `admin` 토큰만. `legacy`에서 토큰 없이 부르면 옛 동작대로 준다.\n\n`real_only=true`면 가상 회원(`buy_100001`~)을 빼고, `limit`명(최대 1000)까지 준다.",
         "operationId": "list_users_api_shop_users_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "real_only",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Real Only",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 1000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -6908,6 +6938,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "List Users"
