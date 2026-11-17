@@ -24,8 +24,9 @@
 - 다시 켜도 안전: 날마다 계획·진행을 `--out/daily_state/<날짜>.json`에 적는다. 주문은 날짜·순번으로
   만든 멱등 키를 보내 다시 보내도 서버가 처음 주문을 돌려준다(두 번 넣지 않는다).
 - 유입 출처: 주문마다 `src_source`·`src_medium`·`src_campaign`을 붙인다(직접 40%·네이버 검색 25%·
-  유튜브 15%·인스타그램 10%·기타 10%, AI·IT 트렌드 때 유튜브 몫이 트렌드 배수만큼 커진다).
-  (시드, 날짜, 순번)으로 정해 계획에 적어 두므로 다시 켜도 같은 값을 보낸다.
+  유튜브 15%·인스타그램 10%·기타 10%, AI·IT 트렌드 때 유튜브 가중치가
+  1 + 0.3×(트렌드 배수 − 1)배로 커진다). (시드, 날짜, 순번)으로 정해 계획에 적어 두므로
+  다시 켜도 같은 값을 보낸다.
 - 정답지: 하루가 끝나면 `--out/daily_answer_key.jsonl`에 그날 한 줄(계획한 장르·페르소나·출처 합계,
   트렌드 단계·배수, 실제로 넣은 건수)을 더한다. 로컬 전용이고 저장소·DB에 넣지 않는다.
 - 되채우기 정답지(`--out/answer_key.json`)와 가상 회원이 없으면 멈춘다(회원을 같은 시드로 다시
@@ -107,7 +108,9 @@ SOURCE_MIX = (
     ("other", "referral", 0.10),
 )
 SOURCE_MEDIUM = {source: medium for source, medium, _share in SOURCE_MIX}
-TREND_SOURCE = "youtube"  # 트렌드 배수(`trend_multiple`)만큼 가중치가 커지고 나머지는 다시 나눈다
+TREND_SOURCE = "youtube"  # 트렌드 때 가중치가 커지고 나머지는 다시 나눈다
+# 유튜브 가중치에 곱하는 값 = 1 + TREND_SOURCE_LIFT × (트렌드 배수 − 1). 늘어난 몫의 30%만 반영한다
+TREND_SOURCE_LIFT = 0.3
 TREND_CAMPAIGN = "ai_it_trend"  # 트렌드 기간의 유튜브·인스타그램 주문에만 붙는 캠페인 표시
 CAMPAIGN_SOURCES = frozenset({"youtube", "instagram"})
 CAMPAIGN_PHASES = frozenset({"rising", "peak", "decay"})
@@ -280,11 +283,11 @@ def day_info(model: Model, day: date) -> dict[str, Any]:
 
 
 def source_mix(info: dict[str, Any]) -> dict[str, float]:
-    """그날 출처 몫. 평소 몫에서 유튜브만 트렌드 배수를 곱하고 합이 1이 되게 다시 나눈다
-    (최고점 ×4.1이면 유튜브 0.15×4.1 / (0.85 + 0.615) ≈ 42%)."""
-    multiple = float(info.get("trend_multiple") or 1.0)
+    """그날 출처 몫. 평소 몫에서 유튜브만 `1 + TREND_SOURCE_LIFT × (배수 − 1)`을 곱하고 합이 1이
+    되게 다시 나눈다(최고점 ×4.1이면 0.15×1.93 / (0.85 + 0.2895) ≈ 25%)."""
+    lift = 1 + TREND_SOURCE_LIFT * (float(info.get("trend_multiple") or 1.0) - 1)
     weights = {
-        source: share * (multiple if source == TREND_SOURCE else 1.0)
+        source: share * (lift if source == TREND_SOURCE else 1.0)
         for source, _medium, share in SOURCE_MIX
     }
     total = sum(weights.values())

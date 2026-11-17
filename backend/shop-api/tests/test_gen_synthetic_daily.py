@@ -551,9 +551,11 @@ def test_source_shares_follow_the_mix_and_youtube_rises_with_the_trend(world) ->
     peak = daily.day_info(model, model.trend_start + timedelta(days=21))
     assert peak["trend_phase"] == "peak"
     hot, campaigns = _shares(model, peak)
-    expected = 0.15 * gen.TREND_PEAK / (0.85 + 0.15 * gen.TREND_PEAK)
+    youtube = 0.15 * (1 + daily.TREND_SOURCE_LIFT * (gen.TREND_PEAK - 1))
+    expected = youtube / (0.85 + youtube)  # 약 25%
+    assert 0.24 < expected < 0.26
     assert abs(hot["youtube"] - expected) < 0.015
-    assert hot["youtube"] > shares["youtube"] + 0.2
+    assert hot["youtube"] > shares["youtube"] + 0.07
     # 나머지는 비율을 지킨 채 줄어든다
     assert abs(hot["direct"] / hot["naver"] - 0.40 / 0.25) < 0.15
     tagged = campaigns[daily.TREND_CAMPAIGN]
