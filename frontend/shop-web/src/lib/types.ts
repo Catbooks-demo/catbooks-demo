@@ -5,6 +5,8 @@
 export interface Product {
   product_id: string; seller_id: string; name: string; category_code: string; price: number; stock: number; active: boolean;
   isbn13?: string | null; author?: string | null; publisher?: string | null; genre_code?: string | null; description?: string | null;
+  /** 표지 그림 주소(도서관 정보나루). 원래 주소로 보여 주기만 한다(받기·저장·프록시 금지). */
+  cover_url?: string | null;
 }
 export interface BestProduct extends Product { sold_qty: number }
 /** `GET /api/shop/genres` */

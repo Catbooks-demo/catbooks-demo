@@ -13,7 +13,7 @@ export function ProductCard({ p, rank }: { p: Product; rank?: number }) {
   return (
     <Link href={`/products/${p.product_id}`} className="group flex w-full flex-col gap-2">
       <div className="relative rounded-md bg-surface-2 p-4 transition group-hover:bg-ink-100">
-        <Cover title={p.name} hue={hueOf(p.product_id)} category={p.category_code} productId={p.product_id} className="mx-auto max-w-[170px]" />
+        <Cover title={p.name} hue={hueOf(p.product_id)} category={p.category_code} productId={p.product_id} coverUrl={p.cover_url} className="mx-auto max-w-[170px]" />
         {rank !== undefined && <span className="absolute left-2 top-2 chip bg-brand-600 text-white">{rank}</span>}
         {soldOut && <span className="absolute right-2 top-2 chip bg-ink-900 text-surface">일시품절</span>}
       </div>

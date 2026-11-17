@@ -12,7 +12,9 @@
 - 캐시: 응답은 `backend/.cache/data4library/`에 저장해 다시 돌리면 이어서 한다
   (키는 저장하지 않는다).
 - 가격·재고는 API에 없어 ISBN 해시로 정한 **데모 값**이다(장르별 현실적인 가격대, 100원 단위).
-- 표지 그림은 받지도 가리키지도 않는다(쇼핑몰이 그리는 표지를 그대로 쓴다).
+- 표지: 응답의 그림 주소(`bookImageURL`)만 `cover_url`로 적는다(http·https만, 받은 그대로).
+  그림 파일은 받지도 저장하지도 않는다. 제공처 이용 조건상 표지는 비영리 화면에서 원래 주소로
+  보여 주기만 할 수 있다(내려받기·저장·재배포·AI 학습 금지). 주소가 없으면 쇼핑몰이 그리는 표지.
 
 실행: `cd backend && uv run python scripts/seed_books.py [--env-file PATH] [--per-genre 30]`
 """
@@ -34,7 +36,13 @@ from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
 
-from ax_shop_api.book_info import AUTHOR_MAX, DESCRIPTION_MAX, PUBLISHER_MAX, normalize_isbn13
+from ax_shop_api.book_info import (
+    AUTHOR_MAX,
+    DESCRIPTION_MAX,
+    PUBLISHER_MAX,
+    normalize_isbn13,
+    safe_cover_url,
+)
 from ax_shop_api.genres import GENRES
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -228,8 +236,10 @@ class Client:
         retries: int = 3,
         http_get: HttpGet = urllib_get,
         sleep: Callable[[float], None] = time.sleep,
+        write_cache: bool = True,
     ) -> None:
         self._key = key
+        self.write_cache = write_cache  # False면 캐시를 읽기만 한다(dry-run)
         self.base_url = base_url.rstrip("/")
         self.cache_dir = cache_dir
         self.max_calls = max_calls
@@ -295,6 +305,8 @@ class Client:
                     raise ApiError(self._scrub(f"API 오류 ({shown}): {error}"))
                 # 응답에 키가 되돌아와도 캐시에는 남기지 않는다. 중간에 끊겨도 반쪽 파일이 없게 쓴다
                 text = self._scrub(json.dumps(data, ensure_ascii=False))
+                if not self.write_cache:
+                    return json.loads(text)
                 self.cache_dir.mkdir(parents=True, exist_ok=True)
                 tmp = path.with_suffix(".json.tmp")
                 tmp.write_text(text, encoding="utf-8", newline="\n")
@@ -454,6 +466,11 @@ def build_books(client: Client, picked: dict[str, list[dict]], log) -> tuple[lis
                 "price": demo_price(isbn, genre),
                 "stock": demo_stock(isbn),
             })  # fmt: skip
+            # 표지 주소(주소만, 그림은 받지 않는다). 맞지 않거나 없으면 칸을 두지 않는다
+            cover = safe_cover_url(doc.get("bookImageURL")) or safe_cover_url(
+                detail.get("bookImageURL"))  # fmt: skip
+            if cover:
+                books[-1]["cover_url"] = cover
         log(f"  {genre}: 상세 {len(picked[genre])}권 완료")
     order = {g: i for i, g in enumerate(BOOK_GENRES)}
     books.sort(key=lambda b: (order[b["genre_code"]], b["isbn13"]))

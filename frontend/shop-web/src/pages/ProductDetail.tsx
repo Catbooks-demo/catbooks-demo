@@ -94,7 +94,10 @@ export default function ProductPage() {
         <Link href="/" className="hover:underline">홈</Link> › <Link href={`/products?category=${p.category_code}`} className="hover:underline">{categoryLabel(p.category_code)}</Link>
       </nav>
       <div className="grid gap-8 md:grid-cols-[320px_1fr]">
-        <div className="rounded-xl bg-surface-2 p-8"><Cover title={p.name} hue={hueOf(p.product_id)} category={p.category_code} productId={p.product_id} className="mx-auto max-w-[240px]" /></div>
+        <div className="rounded-xl bg-surface-2 p-8">
+          <Cover title={p.name} hue={hueOf(p.product_id)} category={p.category_code} productId={p.product_id} coverUrl={p.cover_url} className="mx-auto max-w-[240px]" />
+          {(p.isbn13 || p.cover_url) && <p className="mt-3 text-center text-[11px] text-ink-500">도서 정보·표지: 도서관 정보나루(국립중앙도서관)</p>}
+        </div>
         <div>
           <p className="text-xs font-semibold text-brand-600">{[categoryLabel(p.category_code), genreName].filter(Boolean).join(" · ")}</p>
           <h1 className="mt-1 break-keep text-2xl font-bold leading-snug">{p.name}</h1>

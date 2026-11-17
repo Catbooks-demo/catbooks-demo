@@ -46,8 +46,8 @@ def test_product_list_without_params_is_unchanged(client: TestClient) -> None:
     assert res["meta"] == {}
     assert [p["product_id"] for p in res["data"]] == [f"prd_{n:04d}" for n in range(1, 9)]
     for item in res["data"]:
-        assert set(item) == OLD_KEYS | {"description"}
-        assert item["description"] is None
+        assert set(item) == OLD_KEYS | {"description", "cover_url"}
+        assert item["description"] is None and item["cover_url"] is None
 
 
 def test_description_and_genre_code_validation(client: TestClient) -> None:
