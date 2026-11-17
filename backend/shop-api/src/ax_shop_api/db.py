@@ -203,6 +203,9 @@ _ADDED_COLUMNS = {
         ("genre_code", "TEXT"),
         # 상품 소개(최대 4000자). 비어 있으면 모르는 것이다
         ("description", "TEXT"),
+        # 표지 그림 주소(http·https, 500자까지, `book_info.normalize_cover_url`). 웹이 이 주소로
+        # 바로 불러온다(서버는 그림을 받거나 저장하지 않는다). 비어 있으면 표지 없음
+        ("cover_url", "TEXT"),
     ),
     "orders": (
         ("shipping_fee", "INTEGER NOT NULL DEFAULT 0"),

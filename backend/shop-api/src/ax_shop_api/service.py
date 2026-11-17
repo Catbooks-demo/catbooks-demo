@@ -414,7 +414,8 @@ class Shop:
             "publisher",
             "genre_code",
             "description",
-        )  # 책 정보·장르(선택). 비면 None
+            "cover_url",
+        )  # 책 정보·장르·표지 주소(선택). 비면 None
         return {key: row[key] for key in (*keys, *book)} | {"active": bool(row["active"])}
 
     def get_order(self, order_id: str) -> dict[str, Any]:
@@ -605,12 +606,12 @@ class Shop:
                 conn.execute(
                     "INSERT INTO products (product_id, seller_id, name, category_code, price, "
                     "stock, active, tenant_id, context_id, created_at, updated_at, isbn13, author, "
-                    "publisher, genre_code, description) "
-                    "VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
+                    "publisher, genre_code, description, cover_url) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (product_id, seller_id, item["name"], item["category_code"],
                      item["price"], item["stock"], TENANT_ID, now, now,
                      item.get("isbn13"), item.get("author"), item.get("publisher"),
-                     item.get("genre_code"), item.get("description")),
+                     item.get("genre_code"), item.get("description"), item.get("cover_url")),
                 )  # fmt: skip
             outbox.enqueue(
                 conn,
@@ -643,6 +644,7 @@ class Shop:
         publisher: str | None = None,
         genre_code: str | None = None,
         description: str | None = None,
+        cover_url: str | None = None,
     ) -> dict[str, Any]:
         with self.db.tx() as conn:
             if not conn.execute(
@@ -654,10 +656,10 @@ class Shop:
             conn.execute(
                 "INSERT INTO products (product_id, seller_id, name, category_code, price, stock, "
                 "active, tenant_id, context_id, created_at, updated_at, isbn13, author, "
-                "publisher, genre_code, description) "
-                "VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
+                "publisher, genre_code, description, cover_url) "
+                "VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (product_id, seller_id, name, category_code, price, stock, TENANT_ID, now, now,
-                 isbn13, author, publisher, genre_code, description),
+                 isbn13, author, publisher, genre_code, description, cover_url),
             )  # fmt: skip
         return self.get_product(product_id)
 
@@ -672,6 +674,7 @@ class Shop:
             "publisher",
             "genre_code",
             "description",
+            "cover_url",
         }
         fields = {k: (int(v) if k == "active" else v) for k, v in changes.items() if k in allowed}
         self.get_product(product_id)

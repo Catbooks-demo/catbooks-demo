@@ -8,6 +8,7 @@ export interface CartLine {
   price: number; // 담을 때의 단가(표시용). 실제 금액은 주문 생성 시 서버가 정한다
   stock: number;
   qty: number;
+  cover?: string | null; // 표지 주소(표시용, 그림은 저장하지 않는다)
 }
 
 interface CartValue {
@@ -51,7 +52,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
       const have = cur.find((l) => l.id === p.product_id);
       const next = Math.min(20, Math.max(1, (have?.qty ?? 0) + qty));
       if (have) return cur.map((l) => (l.id === p.product_id ? { ...l, qty: next } : l));
-      return [...cur, { id: p.product_id, title: p.name, category: p.category_code, price: p.price, stock: p.stock, qty: next }];
+      return [...cur, { id: p.product_id, title: p.name, category: p.category_code, price: p.price, stock: p.stock, qty: next, cover: p.cover_url ?? null }];
     });
   }, []);
   const setQty = useCallback((id: string, qty: number) => setLines((cur) => cur.map((l) => (l.id === id ? { ...l, qty: Math.min(20, Math.max(1, qty)) } : l))), []);
