@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-from ax_agent_template.company_connection import shop_api_override
+from ax_agent_template.company_connection import ADAPTER_PATH, connection_file, shop_api_override
 from ax_agent_template.services import SERVICE_PORTS, department_of
+from ax_secret_store import get_secret
 
 # CLAUDE.md 포트 표. 컨테이너에서는 서비스 이름이 호스트 이름이다.
 DEFAULT_PORTS: dict[str, int] = {
@@ -20,10 +22,12 @@ DEFAULT_PORTS: dict[str, int] = {
     "memory": 8002,
     "shop-api": 8010,
     "dashboard-api": 8020,
+    "dejafix-proxy": 8030,
     "planning": 8101,
     "support": 8102,
     "marketing": 8103,
     "hr": 8104,
+    "archive": 8114,  # 아카이브 AI = 서비스 decisions
     "finance": 8105,
     "data": 8106,
     "infra": 8107,
@@ -91,6 +95,25 @@ def is_mock(name: str | None = None) -> bool:
     return any(os.getenv(f"{env_prefix(n)}_MOCK") == "1" for n in {name, department_of(name)})
 
 
+ALLOW_MOCK_ENV = "AX_ALLOW_MOCK"
+
+
+def refuse_mock_outside_tests(name: str | None = None) -> None:
+    """서버를 켤 때 목 스위치가 켜져 있으면 시작을 거부한다 (테스트·`AX_ALLOW_MOCK=1`만 예외).
+
+    목 모드는 `mock:<이름>`·`human:<이름>`을 토큰 없이 받는다. 실제 서버에 `*_MOCK=1`이 남으면
+    누구나 요청자나 승인자로 위조할 수 있으므로 그 상태로는 뜨지 않게 한다.
+    단위 테스트(pytest)는 `create_agent_app`의 lifespan을 돌려도 영향이 없다.
+    """
+    if os.getenv(ALLOW_MOCK_ENV) == "1" or "pytest" in sys.modules:
+        return
+    if is_mock(name):
+        raise RuntimeError(
+            "목 스위치(AGENT_TEMPLATE_MOCK·<부서>_MOCK)가 켜져 있어 서버를 시작하지 않는다. "
+            "목 모드는 테스트 전용이다. 환경변수를 지우고 다시 켠다."
+        )
+
+
 TOKENS_ENV = "AX_AGENT_TOKENS"
 
 
@@ -110,7 +133,8 @@ PLACEHOLDER_TOKEN = "data-via-nginx"
 
 def _registry_pairs() -> list[tuple[str, str]]:
     pairs: list[tuple[str, str]] = []
-    for item in os.getenv(TOKENS_ENV, "").split(","):
+    # env 모드는 os.getenv와 같다. db 모드(AX_SECRET_STORE=db)는 암호화 저장소의 값을 쓴다
+    for item in get_secret(TOKENS_ENV).split(","):
         name, sep, token = item.strip().partition("=")
         if sep and name and token:
             pairs.append((name.strip(), token.strip()))
@@ -149,6 +173,11 @@ def agent_url(target: str) -> str:
     override = os.getenv(f"AX_{env_prefix(target)}_URL")
     if override:
         return override.rstrip("/")
+    if target == "shop-api" and connection_file():
+        # 회사 연결 기능이 켜져 있는데 연결도 주소도 없다 = 연결 안 됨.
+        # 캣북스 판매 서버(기본 포트)로 빠지지 않고 사이트 변환기로 보낸다.
+        # 변환기는 503 NOT_CONFIGURED(연결 안 됨)로 답한다
+        return agent_url("dashboard-api") + ADAPTER_PATH
     port = DEFAULT_PORTS.get(target)
     if port is None:
         raise KeyError(f"알 수 없는 에이전트: {target}")

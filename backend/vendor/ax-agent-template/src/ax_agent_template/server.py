@@ -45,9 +45,14 @@ from ax_agent_template.config import (
     agent_name_scope,
     is_mock,
     placeholder_entries,
+    refuse_mock_outside_tests,
     set_agent_name,
     token_registry,
 )
+from ax_agent_template.improvement_notes import SKILL as NOTES_SKILL
+from ax_agent_template.improvement_notes import handler_for as notes_handler_for
+from ax_agent_template.improvement_notes import list_for_service as notes_for_service
+from ax_agent_template.improvement_notes import with_caution
 from ax_agent_template.logging import log_event
 from ax_agent_template.services import SERVICE_PORTS, department_of
 from ax_contracts.schemas import (
@@ -59,6 +64,7 @@ from ax_contracts.schemas import (
     RequestMeta,
     TaskStatus,
 )
+from ax_secret_store import startup_check
 
 logger = logging.getLogger("ax.template.server")
 
@@ -187,6 +193,9 @@ def create_agent_app(card: AgentCard, handlers: Mapping[str, Handler]) -> FastAP
     # 핸들러 없는 skill은 그대로 실패
     if card.name in SERVICE_PORTS:
         handlers = {k: v for k, v in handlers.items() if k in skill_ids}
+    # 총괄의 개선 노트를 받는 공통 skill은 카드에 적기만 하면 된다(핸들러를 따로 만들지 않는다)
+    if NOTES_SKILL in skill_ids and NOTES_SKILL not in handlers:
+        handlers = {**handlers, NOTES_SKILL: notes_handler_for(card.name)}
     if set(handlers) != skill_ids:
         missing = sorted(skill_ids - set(handlers))
         extra = sorted(set(handlers) - skill_ids)
@@ -196,6 +205,8 @@ def create_agent_app(card: AgentCard, handlers: Mapping[str, Handler]) -> FastAP
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        refuse_mock_outside_tests(card.name)  # 실제 서버에 목 스위치가 남아 있으면 뜨지 않는다
+        startup_check()  # db 모드에서 마스터 키·DB가 안 맞으면 시작 거부
         # 실제 모드에서 구독이 있으면 이벤트 소비를 시작한다(목 모드·구독 없음이면 아무 일도 안 함)
         events.start_consumer()
         try:
@@ -208,6 +219,13 @@ def create_agent_app(card: AgentCard, handlers: Mapping[str, Handler]) -> FastAP
     @app.get("/health")
     def health() -> dict:
         return {"data": {"status": "ok"}, "meta": {}}
+
+    if NOTES_SKILL in skill_ids:
+
+        @app.get("/api/improvement-notes")
+        def improvement_notes() -> dict:
+            """받아 둔 진단 결과(읽기 전용). 고객 정보 없이 단계·시간·건수·진단 문장만 있다."""
+            return {"data": notes_for_service(card.name).model_dump(mode="json"), "meta": {}}
 
     @app.get("/.well-known/agent-card.json")
     def agent_card() -> dict:
@@ -390,4 +408,4 @@ async def _process(
         return error_result(meta, TaskStatus.FAILED, ErrorCode.INVALID_OUTPUT)
     if result.meta.context_id != meta.context_id:
         return error_result(meta, TaskStatus.FAILED, ErrorCode.INVALID_OUTPUT)
-    return result
+    return with_caution(card.name, request.skill, result)

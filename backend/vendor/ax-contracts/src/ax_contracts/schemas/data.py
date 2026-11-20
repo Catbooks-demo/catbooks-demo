@@ -15,6 +15,7 @@ from typing import Any, Literal, Self
 from pydantic import Field, model_validator
 
 from ax_contracts.schemas.common import TENANT_ID_DEFAULT, AxModel, UtcDatetime
+from ax_contracts.schemas.planning import ReceiveInsightInput
 
 # ---------- impact_analysis ----------
 
@@ -49,6 +50,10 @@ class ImpactAnalysisOutput(AxModel):
     # 데이터분석이 이 요청을 처리하기 시작한 시각. 부른 쪽이 대기(요청~시작)와
     # 처리(시작~응답) 시간을 나눠 남기는 데 쓴다(재무 영향 분석 로그). 예전 응답에는 없다
     started_at: UtcDatetime | None = None
+    # 장애 구간에 시간 초과로 남은 결제(확인·환불 필요). 실패 주문·미결제와 따로 센다.
+    # 모르면 None. 예전 응답에는 없다
+    timeout_count: int | None = Field(default=None, ge=0)
+    timeout_amount: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def _customer_count_matches_ids(self) -> Self:
@@ -577,6 +582,17 @@ class CatalogSales(AxModel):
     quick_questions: list[QuickQuestion] = Field(default_factory=list)
     min_group_size: int = Field(default=5, ge=1)  # 한 묶음이 이보다 적으면 숫자를 숨긴다
     active_days: int = Field(default=365, ge=1)  # 대상 고객 = 최근 N일 결제 완료 주문 1회 이상
+    # ---- 11/16 시안 맞춤 (모두 선택)
+    item_noun: str = Field(default="상품", min_length=1)  # 화면에 쓰는 품목 이름 (예: 책·게임)
+    # 이벤트 후보 거르기: 작년 같은 달 검색 배수가 이보다 낮거나 예상 주문(낮은 쪽)이 이보다
+    # 적으면 제안에서 빼고 excluded에 이유와 함께 둔다
+    min_season_multiple: float = Field(default=1.0, ge=0)
+    min_orders_low: int = Field(default=5, ge=0)
+    # ---- 데이터 분석 확장 (11/17, 모두 선택)
+    # 가정: 단골이 이 날 수 넘게 안 사면 떠날 위험으로 본다 (retention at_risk)
+    churn_days: int = Field(default=60, ge=1)
+    repeat_min_orders: int = Field(default=2, ge=2)  # 단골 기준: 결제 완료 주문 이 수 이상
+    value_horizon_days: int = Field(default=90, ge=1)  # 경로별 고객 가치를 보는 기간 (첫 구매부터)
 
     @model_validator(mode="after")
     def _references_exist(self) -> Self:
@@ -666,6 +682,10 @@ class TrendScanInput(AxModel):
     start_date: dt.date  # 기준선 시작 (한국 날짜)
     end_date: dt.date  # 판정할 마지막 날 (한국 날짜, 네이버는 하루 늦게 채워진다)
     time_unit: TrendTimeUnit = "date"
+    # 선택: 네이버 검색어 트렌드 연령·성별 필터. 없으면 전체(지금과 같음). ages는 네이버 연령 코드
+    # 그대로 "1"~"11" (3=19~24세, 4=25~29, 5=30~34, 6=35~39). 사람 나이("20")를 넣지 않는다
+    ages: list[str] | None = None
+    gender: Literal["f", "m"] | None = None
 
     @model_validator(mode="after")
     def _range(self) -> Self:
@@ -674,6 +694,9 @@ class TrendScanInput(AxModel):
         names = [g.group_name for g in self.keyword_groups]
         if len(names) != len(set(names)):
             raise ValueError("group_name이 겹친다")
+        codes = {str(n) for n in range(1, 12)}
+        if self.ages is not None and any(a not in codes for a in self.ages):
+            raise ValueError("ages는 네이버 연령 코드 1~11만")
         return self
 
 
@@ -1391,6 +1414,11 @@ class PromoConcept(AxModel):
     legacy_concept_id: str | None = None
     # 빌린 트렌드가 지금 인기 주제면, 브리프가 같은 주제에 주는 insight_id (stable_insight_id 규칙)
     source_insight_id: str | None = None
+    # 아래는 예전 응답은 없다 (11/18). 기획이 ReceiveInsightInput으로 옮기는 영상 카테고리·형식.
+    # shorts_stats 숏츠 형식 이름 (예: 챌린지). 재무·기획 content_category로 그대로 옮긴다
+    content_category: str | None = Field(default=None, min_length=1, max_length=40)
+    # finance ContentFormat과 같은 값. 데이터는 유튜브 숏츠만 보므로 shorts만 채운다
+    content_format: Literal["shorts", "reels"] | None = None
 
 
 class PromoShortsFormat(AxModel):
@@ -2141,6 +2169,13 @@ class BorrowFormat(AxModel):
     source: Literal["topic", "category", "all"] | None = None  # 어느 단계 숏츠 통계에서 골랐는지
 
 
+class TopicFormatExample(AxModel):
+    """이 주제 숏츠 중 고른 형식인 영상 하나 (제목·조회수는 저장된 값 그대로, 모르면 None)."""
+
+    title: str | None = None
+    views: int | None = Field(default=None, ge=0)
+
+
 class TrendInsight(AxModel):
     insight_id: str = Field(min_length=1)  # 날짜 + 주제 기반 (같은 날 같은 주제면 같은 id)
     rank: int = Field(ge=1)
@@ -2166,8 +2201,15 @@ class TrendInsight(AxModel):
     shorts_format_samples: int | None = Field(default=None, ge=0)
     shorts_format_reason: str | None = None
     # 아래는 예전 응답은 없다. 숏츠 통계와 같은 시점의 그 형식 중앙값 조회수와 기준 시각
+    # (그 형식 전체 숏츠 중앙값 (주제와 무관), 같은 형식이면 모든 주제가 같은 값)
     shorts_format_median_views: float | None = Field(default=None, ge=0)
     shorts_format_at: UtcDatetime | None = None
+    # 아래는 예전 응답은 없다. 이 주제 자기 숏츠 중 고른 형식인 영상의 조회 중앙값 (source=topic일
+    # 때만, 표본이 모자라면 None). 기준 시각 = 이 주제 인기 스냅샷 시각. 예시 = 조회 큰 순 최대 3개
+    shorts_format_topic_median_views: float | None = Field(default=None, ge=0)
+    shorts_format_topic_at: UtcDatetime | None = None
+    shorts_format_topic_examples: list[TopicFormatExample] = Field(default_factory=list)
+    shorts_format_topic_reason: str | None = None  # 값이 없을 때 이유
     # 아래는 예전 응답은 없다. 형식을 어느 단계에서 골랐는지: topic = 이 주제 근거 숏츠,
     # category = 이 주제 카테고리의 숏츠 통계, all = 전체 숏츠 통계.
     # 그 단계의 표본: count = 이 형식인 숏츠 수, total = 형식을 분류한 숏츠 수
@@ -2239,6 +2281,12 @@ class TrendInsight(AxModel):
     promo_subtopic_excluded: int | None = Field(default=None, ge=0)
     # 기획에 넘기는 기준을 통과한 근거 한 줄 (기준을 보는 인사이트만)
     gate_reason: str | None = None
+    # 아래는 예전 응답은 없다 (11/18). 기획이 ReceiveInsightInput으로 옮기는 영상 카테고리·형식.
+    # shorts_stats 숏츠 형식 이름 (예: 챌린지). 재무·기획 content_category로 그대로 옮긴다.
+    # shorts_format_source == "topic"(이 주제 영상에서 고른 형식)일 때만 채운다
+    content_category: str | None = Field(default=None, min_length=1, max_length=40)
+    # finance ContentFormat과 같은 값. 데이터는 유튜브 숏츠만 보므로 shorts만 채운다
+    content_format: Literal["shorts", "reels"] | None = None
 
 
 class BriefGate(AxModel):
@@ -2391,7 +2439,9 @@ class TrendInsightBriefOutput(AxModel):
     gate: BriefGate | None = None
 
 
-BriefTrigger = Literal["auto", "manual"]
+# auto_retry(11/19 추가): 그날 자동 판이 LLM 상한·실패로 덜 만들어졌고 예산이 풀렸을 때 그날 한 번만
+# 자동으로 다시 만든 판 (화면 표시 "자동(다시)")
+BriefTrigger = Literal["auto", "manual", "auto_retry"]
 BriefRegenCode = Literal["daily_limit", "cooldown", "llm_budget", "in_progress", "no_new_data"]
 
 
@@ -3229,6 +3279,7 @@ class InsightPastResult(AxModel):
     """인사이트의 지난번 캠페인 결과 하나 (campaign_result 값 그대로 + 띠 문장). 기획이 받는다.
 
     조회와 매출을 합친 점수는 없다. 측정 중이면 "측정 중"만 (예상치 없음).
+    views는 영상 조회 중앙값이다 (합계가 아님, 영상 수에 따라 커지지 않게).
     """
 
     campaign_id: str
@@ -3254,6 +3305,12 @@ class InsightPastResult(AxModel):
     band: PastBand = "gray"
     summary_line: str = ""  # "조회 목표의 N배 (영상 M개 중 K개 달성) · 매출 +N원 · 주문 +N건"
     note_line: str | None = None  # "지난번 개선 방향: …" 또는 조회·매출 반대 문구
+    # 아래는 예전 응답은 없다. 캠페인 영상(시험 제외)의 게시 7일 조회 중앙값과 그 근거
+    views: int | None = Field(default=None, ge=0)  # 캠페인 영상(시험 제외)의 게시 7일 조회 중앙값
+    views_at: UtcDatetime | None = None  # 그 7일 조회를 잰 시각 중 가장 늦은 시각
+    views_checkpoint: Literal["7d"] | None = None  # 값이 있을 때만 "7d"
+    views_videos: int = Field(default=0, ge=0)  # 중앙값에 쓴 영상 수
+    views_reason: str | None = None  # 값이 없을 때 이유
 
 
 # ---------------------------------------------------------------- 데이터분석 AI 직접 대화 (11/9)
@@ -3394,6 +3451,13 @@ class SalesBasis(AxModel):
     last_synced_at: UtcDatetime | None = None
     catalog_id: str
     catalog_version: str | None = None
+    # 저장소를 채운 출처가 실제 판매 서버가 아닐 때의 표시 (11/16). 가짜 출처(데모 전용
+    # `DATA_SALES_SOURCE=fake`)로 채웠으면 "가짜 데이터(데모용)". 실제 판매 서버면 None
+    data_source: str | None = None
+    # 결과 캐시 (11/17): 이 답을 계산한 시각, 그리고 판매 기록이 바뀌기 전 예전 결과를 먼저 준
+    # 것인지(stale, 새 계산은 뒤에서 돌고 있다). 캐시를 거치지 않은 답은 None·False
+    computed_at: UtcDatetime | None = None
+    stale: bool = False
 
 
 class SalesAnalysisOutput(AxModel):
@@ -3430,7 +3494,8 @@ class SalesAnalysisOutput(AxModel):
 #   기간 시작 시각과 같게 둔다
 # - 대상 고객(이벤트 제안) = 그 속성 묶음에서 최근 `active_days`(기본 365)일 결제 완료 주문이
 #   1회 이상인 고객
-SegmentPeriod = Literal["30d", "90d", "365d"]
+# 1d·7d는 화면의 짧은 기간으로 뒤에 더했다 (기존 값은 그대로)
+SegmentPeriod = Literal["30d", "90d", "365d", "1d", "7d"]
 SegmentTargetKind = Literal["category", "genre", "product"]
 ExternalStatus = Literal["ok", "key_missing", "limit", "error"]
 
@@ -3545,6 +3610,15 @@ class CoverageRow(AxModel):
     suppressed: bool = False
     status: Literal["ok", "population_missing", "error"] = "ok"
     reason: str = ""
+    # ---- 고객 구성 지수 (11/17, 모두 선택). 응답 안 함·인구 없는 줄·숨긴 줄은 None
+    # 이 묶음에 합산한 인구 구간 (사람이 읽는 말, 예: "20~24세 + 25~29세", "50세 이상 합산")
+    population_note: str = ""
+    # 이 묶음 구매자 ÷ 모든 속성 값을 답한 구매자 합 (응답 안 함 제외)
+    buyer_share: float | None = Field(default=None, ge=0, le=1)
+    # 이 묶음 인구 ÷ 표의 모든 묶음 인구 합
+    population_share: float | None = Field(default=None, ge=0, le=1)
+    # buyer_share ÷ population_share × 100 (100 = 인구 구성과 같음)
+    index: float | None = Field(default=None, ge=0)
 
 
 class MarketCoverageInput(AxModel):
@@ -3620,6 +3694,17 @@ class ProposalPastResult(AxModel):
     period_to: UtcDatetime | None = None
 
 
+class BundleBasis(AxModel):
+    """묶음 할인 후보의 근거: basket_pairs의 한 쌍 (같은 사람이 기간 안에 둘 다 산 것)."""
+
+    a_code: str
+    a_label: str = ""
+    b_code: str
+    b_label: str = ""
+    lift: float | None = Field(default=None, ge=0)
+    together_buyers: int | None = Field(default=None, ge=0)
+
+
 class EventProposalItem(AxModel):
     proposal_id: str  # 날짜·조건으로 만든 해시. 같은 입력이면 같은 값
     target_filters: dict[str, str] = Field(default_factory=dict)  # 누구 (속성 key → 값 code)
@@ -3638,6 +3723,7 @@ class EventProposalItem(AxModel):
     summary: str | None = None
     sent: ProposalSent | None = None
     past_results: list[ProposalPastResult] = Field(default_factory=list)
+    bundle: BundleBasis | None = None  # 묶음 할인 후보일 때만 (11/17)
 
 
 class EventProposalInput(AxModel):
@@ -3646,11 +3732,20 @@ class EventProposalInput(AxModel):
     tenant_id: str = TENANT_ID_DEFAULT
 
 
+class ExcludedProposal(AxModel):
+    """기준(min_season_multiple·min_orders_low)에 못 미쳐 제안에서 뺀 후보 하나."""
+
+    target_label: str = ""
+    item_label: str = ""
+    reason: str = ""  # 사람이 읽는 이유 한 줄 (숫자는 서버 값)
+
+
 class EventProposalOutput(AxModel):
     status: Literal["ok", "insufficient"] = "ok"
     insufficient_reasons: list[str] = Field(default_factory=list)
     month: str
     proposals: list[EventProposalItem] = Field(default_factory=list)
+    excluded: list[ExcludedProposal] = Field(default_factory=list)  # 기준 미달로 뺀 후보
     quality: SalesQuality = Field(default_factory=SalesQuality)
     basis: SalesBasis | None = None
     summary: str = ""
@@ -3665,6 +3760,975 @@ class EventProposalSendOutput(AxModel):
     outcome: Literal["created", "duplicate", "rejected"]
     proposal_ref: str | None = None  # 기획 제안 번호 (PROP-n)
     reason: str = ""
+
+
+# ---------------------------------------------------------------- segment_options (11/16)
+# 화면(고객·시장 분석 탭)의 드롭다운·칩·목록을 회사 카탈로그 `[sales]`에서 내려 준다. 화면 코드에
+# 속성·장르·질문 이름을 고정하지 않게. 설정을 읽기만 한다(grade read, 숫자 없음).
+class OptionItem(AxModel):
+    code: str
+    label: str
+
+
+class OptionAttribute(AxModel):
+    key: str
+    label: str
+    values: list[OptionItem] = Field(default_factory=list)  # 카탈로그 순서 그대로
+
+
+class OptionQuestion(AxModel):
+    label: str
+    filters: dict[str, str] = Field(default_factory=dict)  # 속성 key → 값 code
+
+
+class SegmentOptionsInput(AxModel):
+    tenant_id: str = TENANT_ID_DEFAULT
+
+
+class SegmentOptionsOutput(AxModel):
+    attributes: list[OptionAttribute] = Field(default_factory=list)
+    genres: list[OptionItem] = Field(default_factory=list)
+    categories: list[OptionItem] = Field(default_factory=list)
+    quick_questions: list[OptionQuestion] = Field(default_factory=list)
+    event_kinds: list[OptionItem] = Field(default_factory=list)
+    periods: list[SegmentPeriod] = Field(default_factory=lambda: ["30d", "90d", "365d"])
+    # market_coverage에 넣을 수 있는 속성 조합 (카탈로그 population 순서)
+    population_keys: list[list[str]] = Field(default_factory=list)
+    min_group_size: int = Field(default=5, ge=1)
+    data_source: str | None = None  # SalesBasis.data_source와 같은 값
+    catalog_id: str = ""
+    catalog_version: str | None = None
+    item_noun: str = "상품"  # 화면에 쓰는 품목 이름 (카탈로그 item_noun)
+
+
+# ---------------------------------------------------------------- segment_question (11/16)
+# 화면 물어보기 칸의 글 질문을 고르는 칸 값으로 바꾼다. LLM은 그 회사 segment_options 안의
+# code만 고른다. 보기에 없는 code는 버리고, 아무것도 못 고르거나 LLM이 실패하면 unparsed.
+# 숫자는 만들지 않는다(grade read).
+class SegmentQuestionInput(AxModel):
+    text: str = Field(min_length=1, max_length=200)
+    tenant_id: str = TENANT_ID_DEFAULT
+
+
+class SegmentQuestionOutput(AxModel):
+    status: Literal["ok", "unparsed"] = "unparsed"
+    filters: dict[str, str] = Field(default_factory=dict)  # 속성 key → 값 code
+    genre_code: str | None = None
+    period: SegmentPeriod | None = None
+    understood_label: str = ""  # 예: "20대 · 여성 · 직업 전체 · 최근 90일"
+    reason: str = ""  # unparsed일 때 이유 (사람이 읽는 말)
+
+
+# ---------------------------------------------------------------- 데이터 분석 확장 (11/17)
+# basket_pairs · retention · channel_value. 모두 grade read(회사 상태를 바꾸지 않음), LLM 없음.
+# 고객·시장 분석과 같은 규칙: 표준 판매 저장소만 읽고, 결제 완료 주문 기준, 한국 시간 0시 기준 기간,
+# `min_group_size` 미만 묶음은 suppressed=True이고 숫자 칸은 None, 품질 관문에 걸리면
+# status "insufficient"와 이유. 기준값(churn_days·repeat_min_orders·value_horizon_days)은
+# 카탈로그 `[sales]`에서 온다.
+BasketLevel = Literal["genre", "product"]
+
+
+class BasketPairsInput(AxModel):
+    level: BasketLevel = "genre"
+    period: SegmentPeriod = "90d"
+    filters: dict[str, str] = Field(default_factory=dict)  # 속성 key → 값 code (비우면 전체)
+    max_pairs: int = Field(default=10, ge=1, le=20)
+    tenant_id: str = TENANT_ID_DEFAULT
+
+
+class BasketPair(AxModel):
+    """함께 사는 한 쌍. 단위는 '같은 사람이 기간 안에 둘 다 산 것'(주문 단위 아님)."""
+
+    a_code: str
+    a_label: str = ""
+    b_code: str
+    b_label: str = ""
+    together_buyers: int | None = Field(default=None, ge=0)  # 둘 다 산 사람 수
+    a_buyers: int | None = Field(default=None, ge=0)
+    b_buyers: int | None = Field(default=None, ge=0)
+    confidence: float | None = Field(default=None, ge=0, le=1)  # a를 산 사람 중 b도 산 비율
+    lift: float | None = Field(default=None, ge=0)  # confidence ÷ (전체 중 b를 산 비율)
+    suppressed: bool = False
+
+
+class BasketPairsOutput(AxModel):
+    status: Literal["ok", "insufficient"] = "ok"
+    insufficient_reasons: list[str] = Field(default_factory=list)
+    level: BasketLevel = "genre"
+    period: SegmentPeriod = "90d"
+    filters: dict[str, str] = Field(default_factory=dict)
+    pairs: list[BasketPair] = Field(default_factory=list)
+    basis: SalesBasis | None = None
+    quality: SalesQuality = Field(default_factory=SalesQuality)
+    summary: str = ""
+
+
+class RetentionInput(AxModel):
+    cohorts: int = Field(default=3, ge=1, le=6)  # 보는 첫 구매 달 수 (최근 달부터)
+    filters: dict[str, str] = Field(default_factory=dict)  # 속성 key → 값 code (비우면 전체)
+    tenant_id: str = TENANT_ID_DEFAULT
+
+
+class RetentionCohort(AxModel):
+    """첫 구매 달 하나: 그 달 첫 구매 고객 중 30·60·90일 안에 다시 산 비율."""
+
+    cohort_month: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    customers: int | None = Field(default=None, ge=0)
+    # 기간이 아직 다 지나지 않았거나 suppressed면 None
+    r30: float | None = Field(default=None, ge=0, le=1)
+    r60: float | None = Field(default=None, ge=0, le=1)
+    r90: float | None = Field(default=None, ge=0, le=1)
+    suppressed: bool = False
+
+
+class RetentionAtRisk(AxModel):
+    """속성 묶음 하나의 단골 중 churn_days 넘게 안 산 사람 (가정 기준)."""
+
+    filters: dict[str, str] = Field(default_factory=dict)  # 속성 key → 값 code
+    label: str = ""
+    regulars: int | None = Field(default=None, ge=0)  # 단골 수 (repeat_min_orders 이상)
+    at_risk: int | None = Field(default=None, ge=0)
+    share: float | None = Field(default=None, ge=0, le=1)  # at_risk ÷ regulars
+    top_item_label: str | None = None  # 그 묶음이 가장 많이 산 장르·상품 이름
+    suppressed: bool = False
+
+
+class RetentionOutput(AxModel):
+    status: Literal["ok", "insufficient"] = "ok"
+    insufficient_reasons: list[str] = Field(default_factory=list)
+    filters: dict[str, str] = Field(default_factory=dict)
+    cohorts: list[RetentionCohort] = Field(default_factory=list)  # 오래된 달부터
+    at_risk: list[RetentionAtRisk] = Field(default_factory=list)
+    churn_days: int = Field(default=60, ge=1)  # 쓴 기준 (카탈로그 churn_days, 가정)
+    basis: SalesBasis | None = None
+    quality: SalesQuality = Field(default_factory=SalesQuality)
+    summary: str = ""
+
+
+class ChannelValueInput(AxModel):
+    period: SegmentPeriod = "365d"  # 첫 구매가 들어간 기간
+    tenant_id: str = TENANT_ID_DEFAULT
+
+
+class ChannelValueRow(AxModel):
+    """첫 구매 유입 경로 하나: 그 경로로 온 새 고객의 value_horizon_days 동안 가치."""
+
+    source: str | None = None  # 원본 src_source (화면에는 label만). 표시가 없으면 None
+    label: str  # 카탈로그 source_labels 이름, 표시가 없으면 "직접 유입"
+    new_customers: int | None = Field(default=None, ge=0)
+    revenue_per_customer: int | None = Field(default=None, ge=0)  # 원
+    repeat_rate: float | None = Field(default=None, ge=0, le=1)  # 기간 안 다시 산 비율
+    orders_per_customer: float | None = Field(default=None, ge=0)
+    cost_krw: int | None = Field(default=None, ge=0)  # 경로 비용 (재무 연결 전까지 늘 None)
+    suppressed: bool = False
+
+
+class ChannelValueOutput(AxModel):
+    status: Literal["ok", "insufficient"] = "ok"
+    insufficient_reasons: list[str] = Field(default_factory=list)
+    period: SegmentPeriod = "365d"
+    horizon_days: int = Field(default=90, ge=1)  # 쓴 기준 (카탈로그 value_horizon_days)
+    rows: list[ChannelValueRow] = Field(default_factory=list)
+    cost_note: str = "재무 연결 대기"
+    basis: SalesBasis | None = None
+    quality: SalesQuality = Field(default_factory=SalesQuality)
+    summary: str = ""
+
+
+# ---------- trend_memes (요즘 유행·밈, 11/18) ----------
+# 영상 하나가 아니라 여러 채널에서 같이 늘어난 해시태그·제목 구절을 하나의 유행으로 묶는다.
+# 재료는 숏츠 표본(shorts_stats 저장소)과 YouTube 인기 스냅샷의 숏츠뿐(새 외부 호출 없음),
+# 네이버 검색 배수는 상위 몇 개만. 점수·순위·판정은 코드, LLM은 설명 한 줄만
+
+# week = 이번 7일 vs 직전 7일, day = 어제 vs 지난 4주 같은 요일 평균
+MemeWindow = Literal["week", "day"]
+
+
+class TrendMemesInput(AxModel):
+    window: MemeWindow = "week"
+
+
+class MemeVideo(AxModel):
+    """대표 영상 하나 (조회수 순). 썸네일은 주지 않는다(화면은 링크만)."""
+
+    video_id: str = Field(min_length=1)
+    title: str | None = None
+    channel_title: str | None = None
+    views: int | None = Field(default=None, ge=0)
+    video_url: str | None = None
+
+
+class MemeSearch(AxModel):
+    """네이버 검색어 트렌드 배수 (trend_scan과 같은 판정 함수). 상위 몇 개만 본다."""
+
+    # rising·normal·unknown = 판정 결과, not_checked = 보지 않음(순위 밖·하루 한도)
+    status: Literal["rising", "normal", "unknown", "not_checked"] = "not_checked"
+    ratio: float | None = Field(default=None, ge=0)
+    reason: str | None = None
+
+
+class MemePlatform(AxModel):
+    """다른 플랫폼에서 본 같은 유행. `web_search`는 keyword_trend 세션(11/18)부터 채운다."""
+
+    channels: int | None = Field(default=None, ge=0)
+    posts: int | None = Field(default=None, ge=0)
+    ratio: float | None = Field(default=None, ge=0)
+    reason: str | None = None
+    # 아래는 11/18 추가 (검색 플랫폼: 네이버 블로그·카페 글 수와 검색광고 월간 검색량)
+    blog_total: int | None = Field(default=None, ge=0)  # 블로그 전체 검색 결과 수
+    blog_7d: int | None = Field(default=None, ge=0)  # 최근 7일 블로그 글 수 (조회한 결과 안에서)
+    blog_7d_capped: bool = False  # 조회한 최대 개수가 모두 7일 안이라 실제는 더 많을 수 있음
+    cafe_total: int | None = Field(default=None, ge=0)  # 카페글 전체 검색 결과 수
+    monthly_volume: int | None = Field(default=None, ge=0)  # 최근 30일 PC + 모바일 검색량
+    volume_below_10: bool = False  # 네이버가 "<10"으로 준 값이 있음 (숫자로 바꾸지 않음)
+    volume_reason: str | None = None  # 검색량이 없는 이유 (키 없음 등)
+    # 아래는 11/18 인스타 세션 추가 (`instagram` 칸: Instagram 해시태그 검색)
+    # 최근 24시간 게시 수(`posts`)가 조회한 페이지 상한에 닿음 (실제는 더 많음)
+    posts_24h_capped: bool = False
+    top_like_median: float | None = Field(default=None, ge=0)  # 인기 글 좋아요 중앙값
+    status: Literal["known", "unknown", "not_hashtag", "not_checked"] | None = None
+
+
+class TrendMeme(AxModel):
+    name: str = Field(min_length=1)  # 묶음에서 가장 많이 쓰인 표기 (해시태그면 # 붙임)
+    kind: Literal["hashtag", "phrase"]
+    members: list[str] = Field(default_factory=list)  # 하나로 합친 단위들 (표기)
+    description: str | None = None  # LLM 한 줄 (숫자 없음). 없으면 description_reason
+    description_reason: str | None = None
+    channels: int = Field(ge=0)  # 이번 기간 채널 수
+    videos: int = Field(ge=0)  # 이번 기간 영상 수
+    previous_videos: float | None = Field(default=None, ge=0)  # 직전 기간 영상 수(day는 평균)
+    # known = 배수 있음, new = 직전 0이라 새로 등장, unknown = 직전 기간 표본 없음
+    ratio_status: Literal["known", "new", "unknown"] = "unknown"
+    ratio: float | None = Field(default=None, ge=0)
+    ratio_reason: str | None = None
+    search: MemeSearch = Field(default_factory=MemeSearch)
+    topic_category: str | None = None  # 공유 분류기 결과
+    real_entity: bool | None = None
+    entity_names: list[str] = Field(default_factory=list)
+    # ok = 가능, caution = 주의(실존 이름·상표, 분위기·형식만), excluded = 뺌, unknown = 분류 대기
+    ad_material: Literal["ok", "caution", "excluded", "unknown"] = "unknown"
+    ad_material_reason: str = ""
+    products: list[LinkedProduct] = Field(default_factory=list)  # product_link 기준 통과만
+    products_reason: str | None = None  # 연결하지 못한 이유 (상품 목록·임베딩)
+    top_videos: list[MemeVideo] = Field(default_factory=list)
+    # 뒤에 붙일 플랫폼 칸 (화면 칩 인스타·검색). 지금은 늘 None이고 화면에 그리지 않는다.
+    # 네이버 검색 배수는 위 `search` 칸이다
+    instagram: MemePlatform | None = None
+    web_search: MemePlatform | None = None
+    # 11/19 몫(share) 판정: 이번 기간 그 묶음 영상 수 ÷ 이번 기간 전체 숏츠 표본 수,
+    # 직전은 직전 칸들 평균 영상 수 ÷ 평균 표본 수. share_ratio = share ÷ previous_share.
+    # judged_by가 "share"면 기준(min_ratio)을 share_ratio에 쓴다.
+    # ratio·previous_videos는 그대로 채운다(화면 호환)
+    share: float | None = Field(default=None, ge=0)
+    previous_share: float | None = Field(default=None, ge=0)
+    share_ratio: float | None = Field(default=None, ge=0)
+    judged_by: Literal["share", "count"] = "count"
+
+
+class MemeSkipped(AxModel):
+    """유행에서 뺀 단위와 이유."""
+
+    name: str
+    reason: str
+    # exclude_tag = 설정 제외·회사 씨앗, stop_share = 너무 흔한 태그, category = 뉴스·사건 등 분류,
+    # person = 사람 이름 자체
+    kind: Literal["exclude_tag", "stop_share", "category", "person"]
+
+
+class MemeCriteria(AxModel):
+    min_channels: int = Field(ge=1)
+    min_videos: int = Field(ge=1)
+    min_ratio: float = Field(ge=0)
+    max_items: int = Field(ge=1)
+    stop_share: float = Field(gt=0, le=1)
+    overlap: float = Field(gt=0, le=1)
+    search_top: int = Field(ge=0)
+
+
+class TrendMemesOutput(AxModel):
+    window: MemeWindow = "week"
+    status: Literal["known", "unknown"] = "unknown"
+    reason: str | None = None  # unknown이거나 비었으면 이유
+    current_from: UtcDatetime | None = None
+    current_to: UtcDatetime | None = None
+    # 직전 기간 (day면 같은 요일 4일 중 첫날~마지막 날)
+    previous_from: UtcDatetime | None = None
+    previous_to: UtcDatetime | None = None
+    sample_videos: int = Field(default=0, ge=0)  # 중복 뺀 숏츠 수 (게시 시각을 아는 것)
+    current_videos: int = Field(default=0, ge=0)
+    previous_videos: int = Field(default=0, ge=0)  # 직전 기간 표본 수 (0이면 배수 unknown)
+    previous_days: int | None = Field(default=None, ge=0)  # day: 표본이 있는 같은 요일 수
+    unknown_published: int = Field(default=0, ge=0)  # 게시 시각을 몰라 세지 않은 수
+    criteria: MemeCriteria | None = None
+    items: list[TrendMeme] = Field(default_factory=list)
+    skipped: list[MemeSkipped] = Field(default_factory=list)
+    below_threshold: int = Field(default=0, ge=0)  # 기준(채널·영상·배수)을 못 넘은 묶음 수
+    naver_calls: int = Field(default=0, ge=0)  # 이번 계산에서 쓴 네이버 호출
+    limits: list[str] = Field(default_factory=list)
+    generated_at: UtcDatetime | None = None
+    summary: str = ""
+
+
+# ---------- keyword_trend (검색 트렌드 · 도서 분야, 11/18) ----------
+# 키워드 풀(검색광고 키워드 도구 연관어, 하루 1번) → 데이터랩 판정·추정. 숫자·판정은 코드,
+# AI 요약 한 줄만 LLM(explain 숫자 검증). 검색광고 키가 없으면 검색량 칸은 None + 이유, 배수·판정만
+
+# day = 어제 vs 지난 4주 같은 요일, week = 최근 7일 vs 그 전 4주
+KeywordWindow = Literal["day", "week"]
+
+
+class KeywordTrendInput(AxModel):
+    window: KeywordWindow = "day"
+
+
+class KeywordVolume(AxModel):
+    """검색광고 키워드 도구 값 (최근 30일). "<10"은 숫자로 바꾸지 않고 below_10으로 둔다."""
+
+    pc: int | None = Field(default=None, ge=0)
+    mobile: int | None = Field(default=None, ge=0)
+    pc_below_10: bool = False
+    mobile_below_10: bool = False
+    competition: Literal["low", "mid", "high"] | None = None  # compIdx (PC 광고 기준)
+
+    @property
+    def total(self) -> int | None:
+        """PC + 모바일. 한쪽이라도 모르면 None ("<10"도 None, 숫자로 바꾸지 않는다)."""
+        if self.pc is None or self.mobile is None:
+            return None
+        return self.pc + self.mobile
+
+
+class KeywordNews(AxModel):
+    title: str
+    # 네이버 뉴스: 원문 주소 도메인(언론사 이름 칸이 없음), RSS: 출처 이름
+    source: str | None = None
+    url: str | None = None
+    published_at: UtcDatetime | None = None
+
+
+class KeywordSpread(AxModel):
+    """블로그·카페·뉴스 확산 (NAVER API HUB 검색 API, HUB 앱에서 켠 경우만)."""
+
+    status: Literal["known", "unavailable", "not_checked"] = "not_checked"
+    reason: str | None = None
+    blog_total: int | None = Field(default=None, ge=0)
+    blog_7d: int | None = Field(default=None, ge=0)  # 조회한 결과(최대 개수) 안에서 날짜로 센 수
+    blog_7d_capped: bool = False
+    cafe_total: int | None = Field(default=None, ge=0)
+    # 카페글 검색 응답에는 글 날짜가 없어 최근 7일 수를 셀 수 없다 (늘 None + cafe_7d_reason)
+    cafe_7d: int | None = Field(default=None, ge=0)
+    cafe_7d_reason: str | None = None
+    news: list[KeywordNews] = Field(default_factory=list)  # 최대 3개
+
+
+class RisingKeyword(AxModel):
+    keyword: str = Field(min_length=1)
+    rank: int = Field(ge=1)
+    status: TrendStatus  # trend_scan과 같은 판정 함수
+    ratio: float | None = Field(default=None, ge=0)  # 평소 대비 배수
+    score: float | None = None  # z
+    reason: str | None = None  # unknown이면 이유
+    category: str | None = None  # 공용 분류기 분류명
+    volume: KeywordVolume | None = None  # 검색광고 키가 없으면 None
+    monthly_volume: int | None = Field(default=None, ge=0)
+    volume_reason: str | None = None
+    estimate: int | None = Field(default=None, ge=0)  # 어제(week면 최근 7일) 추정 검색 수
+    increase: int | None = None  # 추정 − 지난 4주 같은 요일(week면 그 전 4주) 평균
+    increase_reason: str | None = None
+    news_count: int | None = Field(default=None, ge=0)  # 관련 뉴스 수
+    news_source: Literal["naver_news", "google_rss"] | None = None
+    news: list[KeywordNews] = Field(default_factory=list)
+    spread: KeywordSpread | None = None
+    products: int | None = Field(default=None, ge=0)  # product_link 기준 통과 상품 수
+    product_names: list[str] = Field(default_factory=list)
+    products_reason: str | None = None
+    # v3(11/20): rising · warming(normal이고 ratio ≥ [search] warming_ratio) · normal · unknown
+    level: Literal["rising", "warming", "normal", "unknown"] = "unknown"
+    # 판정에 쓴 마지막 값들(상대값, 지금은 28개)
+    points: list[float] = Field(default_factory=list, max_length=35)
+    baseline: float | None = None  # 평소 값 (판정 evidence 그대로)
+    # 후보로 고른 출처 (같은 말이면 모두)
+    candidate_sources: list[
+        Literal["new", "related_up", "youtube", "google", "company", "pool"]
+    ] = Field(default_factory=list)
+    why_line: str | None = Field(default=None, max_length=160)  # 코드 문장 (뉴스·차트·연관어)
+
+
+class NewKeyword(AxModel):
+    keyword: str
+    monthly_volume: int | None = Field(default=None, ge=0)
+    volume_below_10: bool = False
+
+
+class NewKeywordDay(AxModel):
+    day: dt.date
+    status: Literal["known", "pending"] = "known"  # pending = 그날 풀이 아직 없음(집계 전)
+    reason: str | None = None
+    items: list[NewKeyword] = Field(default_factory=list)
+
+
+class SeasonKeyword(AxModel):
+    keyword: str
+    group: str | None = None  # 공용 분류기 분류명
+    ratio: float = Field(ge=0)  # 작년 이달 비율 ÷ 지난 12개월 평균
+    month_volume: int | None = Field(default=None, ge=0)  # 월간 검색량 × (이달 비율 ÷ 최근 달 비율)
+    volume_reason: str | None = None
+    peak_from: str | None = None  # "MM-DD" (작년 같은 시기 일별 비율이 평균 1.5배 넘는 연속 구간)
+    peak_to: str | None = None
+    peak_reason: str | None = None  # 구간이 없거나 못 본 이유 (화면은 "-")
+    products: int | None = Field(default=None, ge=0)
+    product_names: list[str] = Field(default_factory=list)
+    products_reason: str | None = None
+
+
+class SeasonGroup(AxModel):
+    name: str
+    count: int = Field(ge=0)
+
+
+class KeywordTrendOutput(AxModel):
+    window: KeywordWindow = "day"
+    status: Literal["known", "unknown"] = "unknown"
+    reason: str | None = None
+    generated_at: UtcDatetime | None = None
+    pool_day: dt.date | None = None  # 키워드 풀 날짜 (한국)
+    pool_size: int = Field(default=0, ge=0)
+    # 검색광고 키워드 도구 연결 (화면 데이터 출처 줄에도 쓴다)
+    searchad_status: Literal["connected", "key_missing", "failed"] = "key_missing"
+    searchad_reason: str | None = None
+    # 블로그·카페·뉴스 검색 (HUB에서 켠 경우만)
+    spread_status: Literal["connected", "unavailable", "not_checked"] = "not_checked"
+    spread_reason: str | None = None
+    rising: list[RisingKeyword] = Field(default_factory=list)
+    new_keywords: list[NewKeywordDay] = Field(default_factory=list)  # 최근 4일
+    season_month: int | None = Field(default=None, ge=1, le=12)
+    season: list[SeasonKeyword] = Field(default_factory=list)
+    season_groups: list[SeasonGroup] = Field(default_factory=list)
+    season_reason: str | None = None
+    summary: str | None = None  # AI 요약 (숫자 검증)
+    summary_fallback: bool = False
+    summary_reason: str | None = None
+    naver_calls: int = Field(default=0, ge=0)  # 이번 계산의 데이터랩 호출
+    limits: list[str] = Field(default_factory=list)
+    # v3(11/20): 한도로 오늘 못 본 키워드에 직전 판정을 다시 썼으면 그 날짜(여럿이면 가장 오래된 날)
+    judged_on: dt.date | None = None
+    stale_reason: str | None = None  # "데이터랩 하루 몫을 다 써서 MM-DD 판정을 보여 줘요"
+    candidate_counts: dict[str, int] = Field(default_factory=dict)  # 후보 출처별 개수
+
+
+# ---------- 인스타그램 (11/18) ----------
+# Meta 공식 Graph API(Facebook 로그인, graph.facebook.com)만
+# 캡션·제목은 외부 글(untrusted). 화면은 텍스트로만. 0으로 채우지 않고 모르면 unknown + 이유
+
+IgStatus = Literal["known", "unknown"]
+IgSourceStatus = Literal["connected", "key_missing", "permission", "rate_limited", "failed",
+                         "not_registered"]  # fmt: skip
+
+
+class InstagramSource(AxModel):
+    """화면 데이터 출처 줄 하나 (Instagram Audio·Business Discovery·해시태그 검색·수동 메모)."""
+
+    source_id: Literal["ig_audio", "ig_business_discovery", "ig_hashtag_search", "ig_memo"]
+    name: str
+    status: IgSourceStatus
+    reason: str | None = None
+
+
+class InstagramAudioInput(AxModel):
+    audio_type: Literal["music", "original_sound"] = "music"
+
+
+class InstagramWhyFact(AxModel):
+    """"왜 떴나·왜 뜨나" 근거 한 줄. 숫자는 전부 코드가 계산한 값 (LLM 없음).
+
+    레이더 묶음: spread(퍼짐) · format(형식) · engagement(댓글률) · caption(첫 줄 질문·길이) ·
+    time(올린 시간대) · cross(유튜브·네이버) · unknown(공식 API로 볼 수 없는 것).
+    인기 오디오: rank(7일 전 → 오늘) · youtube(쇼츠 제목·태그) · search(네이버) · unknown.
+    모르면 value None + reason (0으로 채우지 않음).
+    """
+
+    kind: Literal["spread", "format", "engagement", "caption", "time", "cross", "unknown",
+                  "rank", "youtube", "search"]  # fmt: skip
+    label: str
+    value: str | None = None  # 이번 값 (화면 표기)
+    baseline: str | None = None  # 평소 값 (비교 기준 표기, 없으면 None)
+    ratio: float | None = Field(default=None, ge=0)  # 이번 ÷ 평소 (구할 수 없으면 None)
+    reason: str | None = None  # 값을 모르는 이유
+
+
+class InstagramAudioItem(AxModel):
+    rank: int = Field(ge=1)
+    audio_id: str
+    title: str | None = None  # untrusted
+    artist: str | None = None  # 음악은 display_artist, 원본 사운드는 만든이 ig_username
+    duration_ms: int | None = Field(default=None, ge=0)
+    link: str | None = None  # on_platform_audio_preview_link (인스타 안 미리보기 링크)
+    previous_rank: int | None = Field(default=None, ge=1)  # 어제 순위 (없으면 None)
+    rank_change: int | None = None  # 어제 순위 − 오늘 순위 (양수 = 오름)
+    is_new: bool = False  # 어제 목록에 없었음
+    streak_days: int = Field(default=1, ge=1)  # 연속으로 목록에 있던 날 수 (오늘 포함)
+    overlap: list[str] = Field(default_factory=list)  # 같은 오디오를 쓴 유행 (지금은 늘 비어 있음)
+    # "왜 뜨나" 근거 (결론 문장 없음)
+    why_facts: list[InstagramWhyFact] = Field(default_factory=list)
+
+
+class InstagramAudioOutput(AxModel):
+    audio_type: Literal["music", "original_sound"] = "music"
+    status: IgStatus = "unknown"
+    reason: str | None = None
+    day: dt.date | None = None  # 목록 날짜 (한국)
+    previous_day: dt.date | None = None
+    items: list[InstagramAudioItem] = Field(default_factory=list)
+    overlap_reason: str | None = None  # "겹침"을 못 보는 이유
+    limitation: str = "재생 수는 메타가 주지 않음, 앱 안 목록과 다를 수 있음"
+    sources: list[InstagramSource] = Field(default_factory=list)
+    generated_at: UtcDatetime | None = None
+
+
+class InstagramRadarInput(AxModel):
+    pass
+
+
+class InstagramRadarPost(AxModel):
+    """터진 게시물 하나 (계정 이름·게시 링크·지표, 캡션 일부는 untrusted 텍스트)."""
+
+    account: str
+    media_id: str
+    media_product_type: str | None = None  # FEED · REELS · STORY · AD
+    posted_at: UtcDatetime | None = None
+    metric: Literal["view_count", "like_count"]
+    value: int = Field(ge=0)
+    account_median: float = Field(ge=0)
+    ratio: float = Field(ge=0)  # value ÷ account_median
+    permalink: str | None = None
+    caption_excerpt: str | None = None  # 앞 80자, untrusted
+    # 썸네일 주소 (https 인스타 CDN만, oe 만료 전만. 이미지는 내려받지 않음). 릴스·영상은
+    # thumbnail_url, 사진·캐러셀은 media_url(첫 장)
+    thumbnail_url: str | None = None
+    media_type: str | None = None  # IMAGE · VIDEO · CAROUSEL_ALBUM
+    # 계정 평소와 가장 크게 다른 점 한 줄 (코드 템플릿, LLM 없음). 다른 점이 없으면 None
+    standout: str | None = None
+
+
+class InstagramRadarGroup(AxModel):
+    name: str
+    description: str | None = None  # LLM 한 줄 (숫자 없음)
+    description_reason: str | None = None
+    accounts: int = Field(ge=0)
+    posts: int = Field(ge=0)
+    best_ratio: float = Field(ge=0)  # 묶음 안 가장 큰 평소 대비 배수
+    members: list[str] = Field(default_factory=list)  # 묶은 해시태그·구절
+    topic_category: str | None = None
+    ad_material: Literal["ok", "caution", "excluded", "unknown"] = "unknown"
+    ad_material_reason: str = ""
+    top_posts: list[InstagramRadarPost] = Field(default_factory=list)
+    # "왜 떴나": 근거 숫자(코드 계산, 평소와 다른 점만) + LLM 결론 한 줄(숫자 없음, 120자 이하)
+    why_facts: list[InstagramWhyFact] = Field(default_factory=list)
+    why_line: str | None = None
+    why_line_reason: str | None = None  # why_line이 없는 이유
+
+
+class InstagramRadarOutput(AxModel):
+    status: IgStatus = "unknown"
+    reason: str | None = None
+    day: dt.date | None = None
+    accounts_total: int = Field(default=0, ge=0)  # 설정한 계정 수
+    accounts_read: int = Field(default=0, ge=0)  # 오늘 읽은 계정 수
+    accounts_failed: list[str] = Field(default_factory=list)  # 못 읽은 계정 (이유는 limits)
+    bursts: int = Field(default=0, ge=0)  # 터진 게시물 수
+    groups: list[InstagramRadarGroup] = Field(default_factory=list)
+    criteria: str = ""
+    limits: list[str] = Field(default_factory=list)
+    sources: list[InstagramSource] = Field(default_factory=list)
+    generated_at: UtcDatetime | None = None
+
+
+MemoKind = Literal["audio", "format", "hashtag", "other"]
+
+
+class InstagramMemoAddInput(AxModel):
+    kind: MemoKind
+    name: str = Field(min_length=1, max_length=60)
+    memo: str = Field(default="", max_length=200)
+    author: str = Field(min_length=1, max_length=40)
+    linked_trend: str | None = Field(default=None, max_length=60)
+    tenant_id: str = TENANT_ID_DEFAULT
+
+
+class InstagramMemo(AxModel):
+    memo_id: str
+    kind: MemoKind
+    name: str
+    memo: str = ""
+    author: str
+    created_at: UtcDatetime
+    linked_trend: str | None = None
+    source: Literal["manual"] = "manual"  # 출처 표시는 늘 "수동 입력"
+
+
+class InstagramMemoAddOutput(AxModel):
+    outcome: Literal["added", "rejected"]
+    memo: InstagramMemo | None = None
+    reason: str | None = None
+
+
+class InstagramMemoListInput(AxModel):
+    limit: int = Field(default=50, ge=1, le=200)
+    tenant_id: str = TENANT_ID_DEFAULT
+
+
+class InstagramMemoListOutput(AxModel):
+    items: list[InstagramMemo] = Field(default_factory=list)
+    # 쓰기(instagram_memo_add)는 safety 등록과 회사 설정이 있어야 화면에 입력을 보인다
+    can_add: bool = False
+    add_reason: str | None = None
+
+
+# --------------------------------------------------------------- 트렌드 분석 의뢰 보고서
+# 고객 의뢰(제품·타깃·영상 길이·경쟁사·키워드)를 폼 값이나 의뢰 문장으로 받아 보고서를 만든다
+# (trend_report_create · trend_report_get · trend_report_list). 숫자는 전부 코드가 계산하고 LLM은
+# 결론 한 줄과 콘티 문장만 쓴다(숫자 금지). 모르면 status "unknown" + reason, 0으로 채우지 않는다.
+# 프론트와 같이 쓰는 계약이라 필드 이름·값을 바꾸지 않는다.
+
+ReportStatus = Literal["queued", "running", "done", "partial", "failed", "interrupted"]
+SectionStatus = Literal["waiting", "running", "known", "unknown", "failed"]
+# company(11/20 추가): 연결된 회사(tenant)의 domain_profile·판매 집단·키워드 풀·확인된 인스타
+# 계정으로 채운 칸 (값 우선순위: 폼 > 의뢰문 > 프리셋 > 회사)
+FieldSource = Literal["input", "request_text", "preset", "company"]
+ReportCaller = Literal["human", "orchestrator", "planning"]
+BeatSlot = Literal["0-3", "3-15", "15-25", "25-30"]
+
+
+class TrendReportInput(AxModel):
+    preset: str | None = None  # "eco_beauty" 등. null이면 request_text(또는 제품·키워드)로 고른다
+    request_text: str | None = Field(default=None, max_length=4000)  # 의뢰 문장 그대로, untrusted
+    product: str | None = None
+    target_gender: Literal["f", "m"] | None = None
+    target_ages: list[str] | None = None  # 사람 나이 구간 "10","20","30","40","50"
+    format: str | None = None  # "인스타 릴스 30초"
+    competitors: list[str] | None = None  # 인스타 아이디
+    keywords: list[str] | None = None
+    accounts: list[str] | None = None  # 추가로 볼 인스타 아이디
+    caller: ReportCaller = "human"
+    context_id: str | None = None
+    rebuild: bool = False  # true면 같은 의뢰 저장본이 있어도 새로 만든다
+    goal: str | None = None  # 목적 ("브랜드 인지도"). product와 따로 (v2 추가)
+    # 데이터분석 대화 카드에서 넣은 의뢰면 그 대화 id. 진행·완료 메시지를 그 대화에 붙인다
+    chat_thread_id: str | None = Field(default=None, max_length=64)
+
+
+class TrendReportCreated(AxModel):
+    report_id: str
+    status: ReportStatus
+    reused: bool  # 같은 의뢰 저장본을 연 것
+    eta_seconds: int | None = None
+
+
+class TrendReportRef(AxModel):
+    report_id: str
+
+
+class TrendReportListInput(AxModel):
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class TrendReportBriefSources(AxModel):
+    product: FieldSource
+    target: FieldSource
+    format: FieldSource
+    competitors: FieldSource
+    keywords: FieldSource
+    goal: FieldSource | None = None  # goal이 없으면 None (v2 추가)
+
+
+class TrendReportBrief(AxModel):
+    product: str | None = None
+    target_gender: Literal["f", "m"] | None = None
+    target_ages: list[str] = Field(default_factory=list)
+    format: str | None = None
+    competitors: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    preset: str | None = None
+    sources: TrendReportBriefSources
+    # v2 추가: 목적("브랜드 인지도"), 결과물 칩(코드가 길이 표현만 떼어 냄. 못 나누면 [format]),
+    # 경쟁사 표시 이름(business_discovery `name`, 못 받으면 None)
+    goal: str | None = None
+    format_parts: list[str] = Field(default_factory=list)
+    competitor_names: dict[str, str | None] = Field(default_factory=dict)
+
+
+# 검색 행의 근거: filtered(연령·성별 필터) · all(필터 없이 전체) · volume_only(검색광고 월 검색량만)
+# · none(값 없음)
+SearchBasis = Literal["filtered", "all", "volume_only", "none"]
+
+
+class TrendSearchRow(AxModel):
+    keyword: str
+    search_change_pct: float | None = None  # 최근 7일 평균 ÷ 직전 28일 평균 − 1 (%)
+    search_reason: str | None = None
+    shopping_change_pct: float | None = None
+    shopping_reason: str | None = None
+    # v2 추가. small_base: 직전 28일 평균 < 2.0(네이버 상대값)이거나 0인 날이 절반 이상 → 변화율이
+    # 쉽게 커지니 "급증(기준값 작음)"으로 보이고 AI 추천 근거에서 뺀다
+    basis: SearchBasis | None = None  # v1 저장본은 None
+    monthly_volume: int | None = Field(default=None, ge=0)  # 검색광고 월 검색량 (PC+모바일)
+    small_base: bool = False  # 검색 변화율
+    shopping_small_base: bool = False  # 쇼핑 변화율
+    # 11/19: monthly_volume이 null이고 이 값이 "under_10"이면 "월 검색 10 미만" (검색광고 "< 10")
+    monthly_volume_note: Literal["under_10"] | None = None
+
+
+class TrendSearchSection(AxModel):
+    status: SectionStatus = "waiting"
+    reason: str | None = None
+    filter_note: str = ""  # 연령·성별 필터를 어떻게 걸었는지
+    rows: list[TrendSearchRow] = Field(default_factory=list)
+
+
+class TrendHashtagRow(AxModel):
+    tag: str
+    accounts: int = Field(ge=0)  # 이번 7일에 쓴 계정 수
+    previous_accounts: int = Field(ge=0)  # 직전 7일
+    burst_posts: int = Field(ge=0)  # 그중 터진 게시물 수
+    # v2 추가: 이번 7일에 쓴 계정 아이디 최대 5 (그 계정 사용 수 많은 순),
+    # 새로 뜸 = 직전 7일 0곳이고 이번 7일 3곳 이상
+    used_by: list[str] = Field(default_factory=list)
+    is_new: bool = False
+
+
+class TrendHashtagSection(AxModel):
+    status: SectionStatus = "waiting"
+    reason: str | None = None
+    rows: list[TrendHashtagRow] = Field(default_factory=list)
+    account_names: dict[str, str] = Field(default_factory=dict)  # v2: used_by 표시 이름 (아는 것만)
+
+
+class TrendReportMeme(AxModel):
+    name: str
+    description: str | None = None
+    ad_material: Literal["ok", "caution", "excluded", "unknown"]
+
+
+class TrendContentSection(AxModel):
+    status: SectionStatus = "waiting"
+    reason: str | None = None
+    posts: list[InstagramRadarPost] = Field(default_factory=list)  # 썸네일·standout 포함
+    memes: list[TrendReportMeme] = Field(default_factory=list)
+
+
+class TrendCompetitorTrait(AxModel):
+    """잘 된 게시물의 공통점 하나 (v2). 값은 화면에 그대로 쓰는 짧은 문자열."""
+
+    label: Literal["릴스 비율", "첫 줄 질문", "올린 시간", "캡션 길이"]
+    value: str  # "100%" · "밤 9~12시" · "120자"
+    baseline: str  # "평소 35%"
+
+
+class TrendCompetitorRow(AxModel):
+    account: str
+    posts_per_week: float | None = None
+    reels_share: float | None = Field(default=None, ge=0, le=1)
+    reels_view_median: int | None = None
+    best_post: InstagramRadarPost | None = None
+    traits: list[str] = Field(default_factory=list)  # 잘 된 게시물의 공통점 (코드 템플릿)
+    reason: str | None = None
+    name: str | None = None  # v2: 표시 이름 (business_discovery `name`, 못 받으면 None)
+    traits_structured: list[TrendCompetitorTrait] = Field(default_factory=list)  # v2
+
+
+class TrendAccountFailed(AxModel):
+    account: str
+    reason: str
+
+
+class TrendCompetitorSection(AxModel):
+    status: SectionStatus = "waiting"
+    reason: str | None = None
+    rows: list[TrendCompetitorRow] = Field(default_factory=list)
+    accounts_failed: list[TrendAccountFailed] = Field(default_factory=list)
+
+
+class TrendReportEvidence(AxModel):
+    """콘티 근거 하나 (v2). id = "<섹션>:<행 번호(1부터)>" (search·shopping·hashtag·content·
+    meme·competitor). 행 번호는 그 섹션 rows(content는 posts·memes) 순서."""
+
+    id: str
+    text: str  # evidence의 같은 자리 문장
+    short: str = Field(max_length=30)  # 칩용 짧은 형태 ("비건 선크림 검색 +14%")
+
+
+class TrendBeat(AxModel):
+    slot: BeatSlot
+    text: str
+    evidence: list[str] = Field(default_factory=list)  # 코드가 만든 근거 문장
+    # v2: evidence와 같은 순서
+    evidence_items: list[TrendReportEvidence] = Field(default_factory=list)
+
+
+class TrendRecommendationSection(AxModel):
+    status: SectionStatus = "waiting"
+    reason: str | None = None
+    conclusion: str | None = None
+    beats: list[TrendBeat] = Field(default_factory=list)
+    music_note: str = ""
+
+
+class TrendReportSections(AxModel):
+    search: TrendSearchSection = Field(default_factory=TrendSearchSection)
+    hashtags: TrendHashtagSection = Field(default_factory=TrendHashtagSection)
+    content: TrendContentSection = Field(default_factory=TrendContentSection)
+    competitors: TrendCompetitorSection = Field(default_factory=TrendCompetitorSection)
+    recommendation: TrendRecommendationSection = Field(default_factory=TrendRecommendationSection)
+
+
+class TrendReportCalls(AxModel):
+    instagram: int = Field(default=0, ge=0)
+    naver: int = Field(default=0, ge=0)
+    llm: int = Field(default=0, ge=0)
+
+
+class TrendLimitGroups(AxModel):
+    """근거와 한계를 셋으로 (v2). limits는 그대로 채운다."""
+
+    method: list[str] = Field(default_factory=list)  # 숫자 계산 방식
+    cannot_see: list[str] = Field(default_factory=list)  # 볼 수 없는 것
+    this_report: list[str] = Field(default_factory=list)  # 이번 보고서에서 생긴 주의
+
+
+class TrendReport(AxModel):
+    report_id: str
+    status: ReportStatus
+    created_at: UtcDatetime
+    finished_at: UtcDatetime | None = None
+    caller: ReportCaller
+    context_id: str | None = None
+    brief: TrendReportBrief
+    summary_line: str | None = None
+    summary_reason: str | None = None
+    sections: TrendReportSections = Field(default_factory=TrendReportSections)
+    limits: list[str] = Field(default_factory=list)  # 근거와 한계 문장
+    calls: TrendReportCalls = Field(default_factory=TrendReportCalls)
+    limit_groups: TrendLimitGroups = Field(default_factory=TrendLimitGroups)  # v2
+
+
+class TrendReportListItem(AxModel):
+    report_id: str
+    status: ReportStatus
+    created_at: UtcDatetime
+    caller: ReportCaller
+    product: str | None = None
+    summary_line: str | None = None
+    # v3(11/20): 기획 입력을 만들 수 있는지(저장된 보고서로 계산), 기획에 보낸 결과
+    has_insight: bool | None = None
+    handoff: TrendReportHandoffOutput | None = None
+
+
+class TrendReportListOutput(AxModel):
+    items: list[TrendReportListItem] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------- 총괄 연결 (11/20, 15번)
+# 총괄 plan: ① data trend_report_create(caller orchestrator → 긴 작업: WORKING + task_id, 진행
+# task.progress, 끝 task.completed) → ② data trend_report_insight(report_id) → ③ planning
+# receive_insight(②의 insight 그대로). 총괄은 결과에서 번호만 넘긴다.
+
+
+class TrendReportCompletedOutput(AxModel):
+    """task.completed output (번호와 짧은 사실만, 보고서 본문은 싣지 않는다)."""
+
+    report_id: str
+    status: ReportStatus
+    summary_line: str | None = None
+    report_path: str  # "/data/trend#request?id=<id>"
+    has_insight: bool = False  # trend_report_insight가 기획 입력을 만들 수 있는지
+    insight_reason: str | None = None  # 못 만들면 이유
+
+
+class TrendReportInsightInput(AxModel):
+    report_id: str = Field(min_length=1, max_length=64)
+
+
+class TrendReportInsightOutput(AxModel):
+    """보고서 → 기획 receive_insight 입력 그대로 (같은 보고서면 늘 같은 결과, insight_id 고정)."""
+
+    report_id: str
+    insight: ReceiveInsightInput | None = None
+    reason: str | None = None  # insight가 null인 이유 (보고서 없음·아직 만드는 중·근거 없음)
+
+
+# ---------------------------------------------------------------- 기획에 보내기 (11/20, v3)
+# 사람이 보낸 의뢰의 인사이트를 기획 receive_insight로 (trend_report_handoff, grade A, execute
+# "send_trend_report_insight" 먼저). insight_id = "trend_report:" + report_id (총괄과 같은 키라
+# 총괄이 먼저 보냈어도 기획이 duplicate로 받는다).
+
+
+class TrendReportHandoffInput(AxModel):
+    report_id: str = Field(min_length=1, max_length=64)
+
+
+class TrendReportHandoffOutput(AxModel):
+    report_id: str
+    outcome: Literal["created", "duplicate", "rejected", "not_sent"]
+    proposal_id: str | None = None
+    reason: str | None = None
+    sent_at: UtcDatetime | None = None
+    by: str | None = None
+
+
+# ---------------------------------------------------------------- 데이터분석 대화 카드 (11/19)
+# data_chat_get·data_chat_send 응답의 messages[] 하나에 선택 필드 `card`(없거나 null이면 일반 글).
+# 대화는 의뢰 카드(미리보기)만 만들고 접수하지 않는다. 접수는 사람이 카드 버튼으로
+# trend_report_create(caller "human" + chat_thread_id)를 부를 때만. 프론트와 같이 쓰는 모양이라
+# 이름·값을 바꾸지 않는다.
+CardFieldSource = Literal["request_text", "preset", "company"]  # company: 11/20 추가
+
+
+class TrendRequestCardSources(AxModel):
+    product: CardFieldSource
+    target: CardFieldSource
+    format: CardFieldSource
+    competitors: CardFieldSource
+    keywords: CardFieldSource
+
+
+class TrendRequestCardBrief(AxModel):
+    product: str | None = None
+    target_gender: Literal["f", "m"] | None = None
+    target_ages: list[str] = Field(default_factory=list)
+    format: str | None = None
+    competitors: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    competitor_names: dict[str, str] = Field(default_factory=dict)  # 아는 것만, 없으면 {}
+    sources: TrendRequestCardSources
+
+
+class TrendRequestCard(AxModel):
+    kind: Literal["trend_request"] = "trend_request"
+    request_text: str
+    brief: TrendRequestCardBrief
+    preset: str | None = None
+    cost_note: str  # "인스타 약 45번·네이버 약 6번·AI 2번"
+    brief_reason: str | None = None  # 의뢰문에서 칸을 못 뽑았을 때 이유
+    # 11/19: 값이 있으면 이미 접수된 카드 (trend_report_create가 chat_thread_id와 오면 data가 적음)
+    accepted_report_id: str | None = None
+
+
+class TrendReportProgressCard(AxModel):
+    kind: Literal["trend_report_progress"] = "trend_report_progress"
+    report_id: str
+
+
+class TrendReportDoneCard(AxModel):
+    kind: Literal["trend_report_done"] = "trend_report_done"
+    report_id: str
+    status: ReportStatus
+    summary_line: str | None = None
+    top_evidence: list[str] = Field(default_factory=list, max_length=3)
+    report_path: str  # "/data/trend#request?id=<id>"
+
+
+DataChatCard = TrendRequestCard | TrendReportProgressCard | TrendReportDoneCard
 
 
 TrendInsight.model_rebuild()

@@ -13,6 +13,7 @@ from typing import Any, Literal
 from pydantic import Field, model_validator
 
 from ax_contracts.schemas.common import AxModel, UtcDatetime
+from ax_contracts.schemas.finance import ContentFormat
 
 
 class RelatedPr(AxModel):
@@ -589,6 +590,10 @@ class InsightPast(AxModel):
     summary_line: str = Field(default="", max_length=300)
     note_line: str | None = Field(default=None, max_length=300)
     actions: list[str] = Field(default_factory=list, max_length=5)  # 개선 방향 문장 그대로
+    # 아래는 예전 응답은 없다. 조회수 숫자와 잰 시각
+    # (11/18 기획 방향 선택지: 고객사 규모를 숫자로 잰다)
+    views: int | None = Field(default=None, ge=0)
+    views_at: UtcDatetime | None = None
 
 
 class ReceiveInsightInput(AxModel):
@@ -607,6 +612,12 @@ class ReceiveInsightInput(AxModel):
     body_md: str | None = Field(default=None, max_length=8000)  # 설명 (마크다운)
     # 이 인사이트로 했던 지난 캠페인 결과 (최근 3개, 데이터분석 brief v4 past_results)
     past: list[InsightPast] = Field(default_factory=list, max_length=3)
+    # 아래는 예전 요청은 없다. products와 같은 순서의 회사 상품 ID (데이터분석 InsightProduct)
+    product_ids: list[str] = Field(default_factory=list, max_length=10)
+    # 아래는 예전 요청은 없다. 캠페인 콘텐츠 카테고리(예: 아재개그)·형식(재무 ContentFormat).
+    # 재무 의견 → 기획 제안 → 마케팅 실행까지 같은 카테고리로 잇는다 (11/17 태윤 요청)
+    content_category: str | None = Field(default=None, min_length=1, max_length=40)
+    content_format: ContentFormat | None = None
 
 
 class ReceiveInsightOutput(AxModel):
@@ -614,6 +625,59 @@ class ReceiveInsightOutput(AxModel):
     # deleted_recently = 사람이 최근 지운 제안과 같은·비슷한 인사이트라 만들지 않음
     outcome: Literal["created", "duplicate", "deleted_recently"]
     proposal_id: str  # PROP-n
+    # 총괄 의뢰(홍보 영상 흐름)로 받으면 영상 제작안을 바로 써서 돌려준다 (11/19). 사람 확인 전
+    # 초안이라 마케팅에는 아직 안 간다. 그 밖의 요청자는 None (기획안 만들 때 쓴다)
+    video_plan: VideoPlan | None = None
+
+
+class VideoScene(AxModel):
+    """영상 제작안의 장면 하나 (11/19 홍보영상 솔루션 ③ 장면별 스토리보드).
+
+    `caption`은 자막(편집 때 오버레이로 넣는다)이고 영상 모델에 그리지 않는다. `prompt`는 그
+    장면을 만들 영상 생성 프롬프트(영문)이며 글자·실존 인물·실제 브랜드를 요청하지 않는다."""
+
+    n: int = Field(ge=1, le=8)
+    start_s: int = Field(ge=0, le=120)
+    end_s: int = Field(ge=1, le=120)
+    visual: str = Field(min_length=1, max_length=200)  # 화면 구성 (사람이 읽는 한국어)
+    caption: str = Field(default="", max_length=60)  # 자막 (오버레이, 비면 자막 없음)
+    prompt: str = Field(min_length=1, max_length=800)  # 영상 생성 프롬프트 (영문)
+
+    @model_validator(mode="after")
+    def _ends_after_start(self) -> VideoScene:
+        if self.end_s <= self.start_s:
+            raise ValueError("end_s는 start_s보다 커야 한다")
+        return self
+
+
+class VideoPlan(AxModel):
+    """기획 → 마케팅 영상 제작안: 콘셉트·대본·장면별 스토리보드·영상 생성 프롬프트.
+
+    `style`은 모든 장면 프롬프트에 공통으로 붙일 화풍, `negative`는 공통 금지(글자·로고·실존
+    인물·실제 브랜드). 장면 시간은 0초부터 빈틈없이 이어지고 마지막 장면이 `duration_s`에 끝난다."""
+
+    concept: str = Field(min_length=1, max_length=200)  # 홍보 콘셉트 한 줄
+    duration_s: int = Field(ge=5, le=120)
+    aspect: Literal["9:16", "1:1", "16:9"] = "9:16"
+    script: str = Field(min_length=1, max_length=800)  # 전체 흐름 대본 (한국어)
+    scenes: list[VideoScene] = Field(min_length=1, max_length=8)
+    style: str = Field(min_length=1, max_length=300)  # 공통 화풍 (영문)
+    negative: str = Field(min_length=1, max_length=300)  # 공통 금지 (영문)
+    written_by: Literal["llm", "rule", "human"] = "rule"
+
+    @model_validator(mode="after")
+    def _scenes_cover_duration(self) -> VideoPlan:
+        at = 0
+        for i, sc in enumerate(self.scenes, start=1):
+            if sc.n != i or sc.start_s != at:
+                raise ValueError("장면은 1번부터 차례로, 앞 장면이 끝난 시각에 시작해야 한다")
+            at = sc.end_s
+        if at != self.duration_s:
+            raise ValueError("마지막 장면이 duration_s에 끝나야 한다")
+        return self
+
+
+ReceiveInsightOutput.model_rebuild()  # video_plan이 아래에 정의된 VideoPlan을 가리킨다
 
 
 class CampaignBriefInput(AxModel):
@@ -634,6 +698,19 @@ class CampaignBriefInput(AxModel):
     body_md: str | None = None
     # 후속 기획이면 이어 가는 지난 캠페인 id (같은 캠페인을 계속하는 방향, 11/6 예진 결정)
     continue_campaign: str | None = None
+    # 아래는 예전 요청은 없다. products와 같은 순서의 회사 상품 ID (인사이트에서 받은 것)
+    product_ids: list[str] = Field(default_factory=list, max_length=10)
+    # 아래는 예전 요청은 없다. 인사이트에서 받은 콘텐츠 카테고리·형식 (재무·마케팅 content_category,
+    # format과 같은 값). `format`은 기획 초안의 자유 문구(숏폼 15초 등)라 이름을 따로 둔다
+    content_category: str | None = Field(default=None, min_length=1, max_length=40)
+    content_format: ContentFormat | None = None
+    # 아래는 예전 요청은 없다. 사람이 고른 기획 방향과 올라탈 유행 후보 이름
+    # (11/18 기획 방향 선택지)
+    idea_angle: Literal["ride_trend", "own_trend", "with_product"] | None = None
+    trend_refs: list[str] = Field(default_factory=list, max_length=3)
+    # 아래는 예전 요청은 없다. 영상 제작안(콘셉트·대본·장면별 스토리보드·영상 생성 프롬프트).
+    # 사람이 기획안에서 확인한 뒤 넘긴다 (11/19 홍보영상 솔루션 ③→⑤)
+    video_plan: VideoPlan | None = None
 
 
 class CampaignBriefOutput(AxModel):
