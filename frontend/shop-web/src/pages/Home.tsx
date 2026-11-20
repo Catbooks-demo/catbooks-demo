@@ -66,7 +66,9 @@ export default function Home() {
 
       <div className="mt-10 grid gap-8 lg:grid-cols-[1fr_260px]">
         <div className="min-w-0">
-          <section>
+          {/* "새로 나온 책"은 첫 장르 줄 아래(한 칸 아래)에 둔다: 실제 표지가 있는 책이 맨 위에 먼저 보이게 한다. 장르 줄이 없으면 맨 위 */}
+          {rows[0] && <ProductRow key={rows[0].genre.genre_code} title={rows[0].genre.name} href={`/products?genre=${rows[0].genre.genre_code}`} items={rows[0].items} className="" />}
+          <section className={rows[0] ? "mt-10" : ""}>
             <div className="mb-4 flex items-end justify-between">
               <h2 className="text-xl font-bold tracking-tight">새로 나온 책</h2>
               <Link href="/products?sort=new" className="text-sm text-ink-500 hover:text-ink-900">더 보기 ›</Link>
@@ -75,7 +77,7 @@ export default function Home() {
               {(fresh ?? []).map((p) => <ProductCard key={p.product_id} p={p} />)}
             </div>
           </section>
-          {rows.map(({ genre, items }) => (
+          {rows.slice(1).map(({ genre, items }) => (
             <ProductRow key={genre.genre_code} title={genre.name} href={`/products?genre=${genre.genre_code}`} items={items} />
           ))}
         </div>
