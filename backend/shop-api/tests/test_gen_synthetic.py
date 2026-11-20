@@ -201,6 +201,9 @@ def test_orders_follow_shop_rules(tmp_path: Path) -> None:
         else:  # 결제 전 취소·결제 실패: 성공한 결제가 없다(환불 없이 취소하지 않는다)
             assert o["status"] in ("cancelled", "payment_failed") and "succeeded" not in statuses
             assert o["shipped_at"] is None and o["delivered_at"] is None
+        # 가상 취소는 모두 손님 취소다. 취소가 아닌 주문에는 취소 주체가 없다
+        expected = "buyer" if o["status"] == "cancelled" else None
+        assert o["cancel_reason_code"] == expected
         if o["delivered_at"]:
             assert o["shipped_at"] < o["delivered_at"]
     assert bad_reviews == 0 and images == 0

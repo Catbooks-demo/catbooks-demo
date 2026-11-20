@@ -1083,8 +1083,9 @@ class Shop:
                     (item["qty"], item["product_id"]),
                 )
             conn.execute(
-                "UPDATE orders SET status = 'cancelled', updated_at = ? WHERE order_id = ?",
-                (_now(), order_id),
+                "UPDATE orders SET status = 'cancelled', cancel_reason_code = ?, updated_at = ? "
+                "WHERE order_id = ?",
+                (reason_code, _now(), order_id),
             )
             outbox.enqueue(
                 conn,

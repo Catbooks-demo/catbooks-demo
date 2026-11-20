@@ -308,3 +308,25 @@ def test_demo_login_gives_a_token_only_when_enabled(
     assert _order(client, _bearer(data["token"]))["buyer_id"] == "buy_0002"
     missing = client.post("/api/shop/sessions", json={"buyer_id": "buy_9999"})
     assert missing.status_code == 404 and _code(missing) == "BUYER_NOT_FOUND"
+
+
+def test_buyer_cannot_claim_seller_or_system_as_cancel_reason(client: TestClient, db: Db) -> None:
+    """구매자 토큰으로 취소하면 무엇을 보내도 취소 주체는 buyer, admin은 보낸 값 그대로."""
+    a, _ = _signup(client, "cancel-a@example.com")
+    mine = _order(client, a)
+    res = client.post(
+        f"/api/shop/orders/{mine['order_id']}/cancel", json={"reason_code": "seller"}, headers=a
+    )
+    assert res.status_code == 200
+    _, buyer_b = _signup(client, "cancel-b@example.com")
+    theirs = _order(client, ADMIN, buyer_id=buyer_b)
+    by_admin = client.post(
+        f"/api/shop/orders/{theirs['order_id']}/cancel",
+        json={"reason_code": "seller"},
+        headers=ADMIN,
+    )
+    assert by_admin.status_code == 200
+    with db.tx() as conn:
+        got = dict(conn.execute("SELECT order_id, cancel_reason_code FROM orders"))
+    assert got[mine["order_id"]] == "buyer"
+    assert got[theirs["order_id"]] == "seller"

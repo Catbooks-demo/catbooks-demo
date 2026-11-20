@@ -80,7 +80,8 @@ class SalesExport:
         settled = _iso(collected_at - SETTLE)
         sql = (
             "SELECT order_id, buyer_id, status, created_at, updated_at, shipping_fee, "
-            "points_used, coupon_discount, src_source, src_medium, src_campaign "
+            "points_used, coupon_discount, src_source, src_medium, src_campaign, "
+            "cancel_reason_code "
             "FROM orders WHERE tenant_id = ? AND updated_at <= ?"
         )
         args: list[Any] = [query.tenant_id, settled]
@@ -116,6 +117,10 @@ class SalesExport:
                     lines=order_lines,
                     refunds=refunds[r["order_id"]],
                     tenant_id=query.tenant_id,
+                    # 취소 주체: 취소된 주문만, 모르면 None(지어내지 않는다)
+                    cancel_reason_code=(
+                        r["cancel_reason_code"] if r["status"] == "cancelled" else None
+                    ),
                 )
             )
         if rows:
