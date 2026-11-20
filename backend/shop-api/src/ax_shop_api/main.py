@@ -1240,7 +1240,7 @@ def create_app(
     @app.post("/api/shop/orders/{order_id}/cancel")
     async def cancel(order_id: str, body: CancelIn, request: Request) -> dict:
         _own_order(request, order_id)
-        # 구매자 토큰으로 취소하면 취소 주체는 언제나 buyer다(구매자가 seller·system을 고르지 못한다)
+        # 구매자 토큰으로 취소하면 취소 주체는 언제나 buyer다(seller·system을 고르지 못한다)
         reason = "buyer" if _identify(request).kind == "buyer" else body.reason_code
         order = shop.cancel(order_id, reason)
         await outbox.flush(database)
