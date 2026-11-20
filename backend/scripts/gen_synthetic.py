@@ -2203,7 +2203,7 @@ def write(
     conn.executemany(
         "INSERT INTO orders (order_id, buyer_id, status, total_amount, tenant_id, context_id, "
         "created_at, updated_at, shipping_fee, points_used, delivered_at, promised_delivery_at, "
-        "shipped_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, 0, ?, ?, ?)",
+        "shipped_at, cancel_reason_code) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, 0, ?, ?, ?, ?)",
         [
             (
                 o.order_id,
@@ -2217,6 +2217,8 @@ def write(
                 _stamp(o.delivered),
                 _stamp(o.promised),
                 _stamp(o.shipped),
+                # 가상 취소는 두 가지뿐이다: 결제 전 손님 취소, 결제 거절 뒤 손님이 그만둠
+                "buyer" if o.status == "cancelled" else None,
             )
             for o in orders
         ],

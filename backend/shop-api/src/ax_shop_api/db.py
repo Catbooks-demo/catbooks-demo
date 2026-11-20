@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS orders (
   delivered_at TEXT, promised_delivery_at TEXT, shipped_at TEXT, idempotency_key TEXT,
   coupon_id TEXT, coupon_units INTEGER NOT NULL DEFAULT 0,
   coupon_discount INTEGER NOT NULL DEFAULT 0,
-  src_source TEXT, src_medium TEXT, src_campaign TEXT
+  src_source TEXT, src_medium TEXT, src_campaign TEXT, cancel_reason_code TEXT
 );
 CREATE TABLE IF NOT EXISTS order_items (
   order_id TEXT NOT NULL REFERENCES orders(order_id), product_id TEXT NOT NULL,
@@ -221,6 +221,8 @@ _ADDED_COLUMNS = {
         ("src_source", "TEXT"),
         ("src_medium", "TEXT"),
         ("src_campaign", "TEXT"),
+        # 취소 주체(buyer·seller·system). 취소가 아니거나 모르면 NULL. 판매 기록 내보내기가 싣는다
+        ("cancel_reason_code", "TEXT"),
     ),
     "order_items": (
         ("title", "TEXT"),
@@ -296,10 +298,29 @@ class Db:
             for name, definition in columns:
                 if name not in have:
                     self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+                    if (table, name) == ("orders", "cancel_reason_code"):
+                        self._backfill_cancel_reason()
         for statement in _ADDED_INDEXES:
             self._conn.execute(statement)
         self._conn.commit()
         self._lock = threading.RLock()
+
+    def _backfill_cancel_reason(self) -> None:
+        """칸이 없던 옛 DB: 남아 있는 `order.cancelled` 이벤트의 `reason_code`로 채운다.
+
+        이벤트가 보존 기간으로 지워진 주문은 NULL로 둔다(지어내지 않는다).
+        """
+        self._conn.execute(
+            "UPDATE orders SET cancel_reason_code = ("
+            "SELECT json_extract(e.payload, '$.data.reason_code') FROM outbox_events e "
+            "WHERE json_extract(e.payload, '$.idempotency_key') "
+            "= 'order.cancelled:' || orders.order_id"
+            ") WHERE status = 'cancelled' AND cancel_reason_code IS NULL"
+        )
+        self._conn.execute(
+            "UPDATE orders SET cancel_reason_code = NULL "
+            "WHERE cancel_reason_code NOT IN ('buyer', 'seller', 'system')"
+        )
 
     @property
     def is_file(self) -> bool:

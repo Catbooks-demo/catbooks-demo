@@ -94,6 +94,10 @@ class FinanceOpinion(AxModel):
     recommendation: str
     applied_rules: list[dict[str, Any]] = Field(default_factory=list)
     submitted_at: str
+    # 아래는 11/18 추가. 기획이 알아야 하는 의견(콘텐츠 제작비 재배분 등)이면 총괄이 기획
+    # `receive_insight`로 그대로 넘길 입력을 함께 싣는다. 형식은 planning `ReceiveInsightInput`
+    # (계약끼리 서로 import하지 않으려고 dict로 둔다. 총괄이 넘기기 전에 검증한다)
+    planning_insight: dict[str, Any] | None = None
 
 
 class ReceiveFinanceOpinionOutput(AxModel):
@@ -101,6 +105,12 @@ class ReceiveFinanceOpinionOutput(AxModel):
 
     opinion_id: str
     duplicate: bool = False
+
+
+# 캠페인 콘텐츠 형식: shorts(유튜브 쇼츠), reels(인스타그램 릴스)
+ContentFormat = Literal["shorts", "reels"]
+# 조회수 측정 시점(데이터 `video_performance`): 게시 후 1시간·1일·3일·7일
+ViewsPoint = Literal["1h", "1d", "3d", "7d"]
 
 
 class CampaignResultInput(AxModel):
@@ -123,6 +133,14 @@ class CampaignResultInput(AxModel):
     measured_gmv_krw: int | None = None
     measured_orders: int | None = None
     effect_generated_at: str | None = None  # campaign_effect의 generated_at
+    # 아래는 옛 요청에 없다(콘텐츠 카테고리별 예산, 11/17). 모르면 비워 둔다
+    content_category: str | None = Field(default=None, min_length=1, max_length=40)  # 예: 아재개그
+    format: ContentFormat | None = None
+    # 영상 제작비. 광고비(spend_krw)와 따로 적는다. 끝난 금액만
+    production_cost_krw: int | None = Field(default=None, ge=0)
+    # 조회수: 데이터 `video_performance`가 잰 값 그대로. views_point는 그 측정 시점
+    views: int | None = Field(default=None, ge=0)
+    views_point: ViewsPoint | None = None
 
 
 class CampaignBudgetReviewInput(AxModel):
@@ -130,6 +148,30 @@ class CampaignBudgetReviewInput(AxModel):
     campaign_name: str
     channel: str
     requested_krw: int = Field(gt=0)
+    # 캠페인이 다루는 상품 ID(선택, 최대 10개). 재무가 고객지원 `book_issue_stats`(`claims`)로
+    # 불만 많은 책인지 읽는 데 쓴다. 비워 두면(옛 요청) 상품 신호를 반영하지 않는다
+    product_ids: list[str] = Field(default_factory=list, max_length=10)
+    # 아래는 옛 요청에 없다(콘텐츠 카테고리별 예산, 11/17)
+    content_category: str | None = Field(default=None, min_length=1, max_length=40)
+    format: ContentFormat | None = None
+
+
+class CustomerReactionSummary(AxModel):
+    """예산 의견에 반영한 고객 반응(`CRX-001`)의 요약.
+
+    호출한 쪽·화면이 "걸림", "못 읽음", "판매 적음"을 나눠 볼 수 있다.
+
+    `status`: clear(읽었고 걸린 책 없음), flagged(걸린 책이 있어 한도를 줄임), unavailable(고객지원
+    집계를 못 읽어 반영 안 함), not_relevant(요청에 상품이 없음). 목록의 값은 모두 상품 ID다
+    (제목은 바뀔 수 있어서 화면이 상품 ID로 찾아 붙인다).
+    `sales_unread`는 판매 수량을 못 읽어 비율을 못 낸 책이고, `low_sales`(판매가 적어 참고만 한
+    책)와 다르다.
+    """
+
+    status: Literal["clear", "flagged", "unavailable", "not_relevant"]
+    flagged: list[str] = Field(default_factory=list)
+    low_sales: list[str] = Field(default_factory=list)
+    sales_unread: list[str] = Field(default_factory=list)
 
 
 class CampaignBudgetReviewOutput(AxModel):
@@ -153,6 +195,8 @@ class CampaignBudgetReviewOutput(AxModel):
     # recommend: 그대로 권함, reduce: 줄이기를 권함, not_recommended: 권하지 않음
     opinion: Literal["recommend", "reduce", "not_recommended"] | None = None
     suggested_krw: int | None = None  # 재무가 권하는 금액 (권하지 않으면 0)
+    # 고객 반응 요약(`CRX-001`). 옛 재무가 보낸 결과에는 없어서 None이다
+    customer_reaction: CustomerReactionSummary | None = None
 
 
 class CampaignCancelInput(AxModel):
@@ -160,6 +204,46 @@ class CampaignCancelInput(AxModel):
 
     campaign_id: str
     reason: str = Field(min_length=1)
+
+
+# ---------------------------------------------------------------- 기획 → 재무 제작비 묻기 (11/18)
+# 기획이 영상 기획안을 마케팅에 넘기기 전에 그 콘텐츠 카테고리의 제작비를 재무에 직접 묻는다
+# (finance `category_budget_advice`, read). 재무는 마케팅 결과·데이터 AI 7일 조회수로 낸
+# 조회당 제작비와 다음 회차 권장 제작비를 돌려준다. 의견일 뿐, 비중은 기획·마케팅과 사람이 정한다.
+CategoryBudgetStatus = Literal["advice", "measuring", "no_data"]
+
+
+class CategoryBudgetAdviceInput(AxModel):
+    content_category: str | None = Field(default=None, min_length=1, max_length=40)
+    content_format: ContentFormat | None = None
+    proposal_id: str | None = Field(default=None, max_length=40)  # 묻는 기획 제안 (기록용)
+
+
+class CategoryBudgetRow(AxModel):
+    content_category: str
+    measured_campaigns: int = Field(ge=0)  # 7일 조회수를 잰 캠페인 수
+    measuring: int = Field(ge=0)  # 7일이 안 돼 아직 재는 캠페인 수
+    cost_per_view: float | None = None  # 조회 1회당 제작비(원)
+    latest_production_krw: int | None = None  # 가장 최근 회차 제작비
+    recommended_production_krw: int | None = None  # 다음 회차 권장 제작비 (재무 의견)
+
+
+class CategoryBudgetShift(AxModel):
+    from_category: str  # 조회당 제작비가 가장 비싼 카테고리 (줄일 쪽)
+    to_category: str  # 가장 싼 카테고리 (늘릴 쪽)
+    amount_krw: int = Field(ge=0)
+    ratio: float  # 비싼 쪽 조회당 제작비 ÷ 싼 쪽
+
+
+class CategoryBudgetAdviceOutput(AxModel):
+    # advice: 물은 카테고리를 쟀다 / measuring: 재는 중 / no_data: 기록 없음
+    status: CategoryBudgetStatus
+    content_category: str | None = None
+    recommended_production_krw: int | None = None  # 물은 카테고리의 다음 회차 권장 제작비
+    rows: list[CategoryBudgetRow] = Field(default_factory=list)
+    shift: CategoryBudgetShift | None = None
+    summary: str  # 사람이 읽는 한 줄 (기획이 기획안 근거로 그대로 싣는다)
+    applied_rules: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------- 재무 AI 직접 대화 (11/9)

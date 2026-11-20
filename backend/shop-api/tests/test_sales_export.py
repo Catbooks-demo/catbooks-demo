@@ -18,6 +18,7 @@ DATA = {"Authorization": "Bearer mock:data"}
 ADMIN = {"Authorization": "Bearer mock:admin"}
 MARKETING = {"Authorization": "Bearer mock:marketing"}
 SUPPORT = {"Authorization": "Bearer mock:support"}
+DETECTOR = {"Authorization": "Bearer mock:dashboard-api"}  # AXcellent 변화 감지기(#1457)
 URL = "/api/shop/sales-export"
 
 
@@ -165,6 +166,12 @@ def test_permissions_401_and_403(client: TestClient) -> None:
     assert client.get(URL, headers=SUPPORT).status_code == 403
     assert client.get(URL, headers=DATA).status_code == 200
     assert client.get(URL, headers=ADMIN).status_code == 200
+    assert client.get(URL, headers=DETECTOR).status_code == 200
+
+
+def test_detector_token_reads_only_sales_export(client: TestClient) -> None:
+    """감지기 토큰은 판매 기록 내보내기만 연다. 같은 data 읽기 묶음의 다른 경로는 그대로 막힌다."""
+    assert client.get("/api/shop/customers-export", headers=DETECTOR).status_code == 403
 
 
 @pytest.mark.parametrize(("limit", "status"), [(0, 400), (1, 200), (1000, 200), (1001, 400)])
@@ -226,3 +233,67 @@ def test_line_genre_code_comes_from_the_product(client: TestClient, db: Db) -> N
     rows = {o.order_id: o for o in _page(client).orders}
     assert rows[with_genre["order_id"]].lines[0].genre_code == "it"
     assert rows[other["order_id"]].lines[0].genre_code is None
+
+
+@pytest.mark.parametrize("who", ["buyer", "seller", "system"])
+def test_cancelled_row_carries_cancel_reason(client: TestClient, db: Db, who: str) -> None:
+    order = _order(client, pay=False)
+    client.post(f"/api/shop/orders/{order['order_id']}/cancel", json={"reason_code": who})
+    _set_updated(db, order["order_id"], "2026-11-01T00:00:00Z")
+    row = _page(client).orders[0]
+    assert (row.status, row.cancel_reason_code) == ("cancelled", who)
+
+
+def test_not_cancelled_rows_have_no_cancel_reason(client: TestClient, db: Db) -> None:
+    paid = _order(client)
+    _set_updated(db, paid["order_id"], "2026-11-01T00:00:00Z")
+    assert _page(client).orders[0].cancel_reason_code is None
+    with db.tx() as conn:  # 칸에 값이 남아 있어도 취소가 아니면 싣지 않는다
+        conn.execute(
+            "UPDATE orders SET cancel_reason_code = 'seller' WHERE order_id = ?",
+            (paid["order_id"],),
+        )
+    assert _page(client).orders[0].cancel_reason_code is None
+
+
+def test_old_file_backfills_cancel_reason_from_kept_events(tmp_path) -> None:
+    """칸이 없던 옛 DB: 남은 order.cancelled 이벤트로 채우고, 이벤트가 없으면 NULL로 둔다."""
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE orders (order_id TEXT PRIMARY KEY, buyer_id TEXT NOT NULL, "
+        "status TEXT NOT NULL, total_amount INTEGER NOT NULL, tenant_id TEXT NOT NULL, "
+        "context_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE outbox_events (event_id TEXT PRIMARY KEY, payload TEXT NOT NULL, "
+        "tenant_id TEXT NOT NULL, context_id TEXT, created_at TEXT NOT NULL, sent_at TEXT)"
+    )
+    stamp = "2026-11-01T00:00:00Z"
+    for order_id, status in (
+        ("ord_a", "cancelled"),
+        ("ord_b", "cancelled"),
+        ("ord_c", "paid"),
+        ("ord_d", "cancelled"),
+    ):
+        conn.execute(
+            "INSERT INTO orders VALUES (?, 'buy_0001', ?, 1000, 'shop-demo', NULL, ?, ?)",
+            (order_id, status, stamp, stamp),
+        )
+    for order_id, reason in (("ord_a", "seller"), ("ord_d", "made-up")):
+        payload = (
+            '{"idempotency_key": "order.cancelled:' + order_id + '", '
+            '"data": {"order_id": "' + order_id + '", "reason_code": "' + reason + '"}}'
+        )
+        conn.execute(
+            "INSERT INTO outbox_events VALUES (?, ?, 'shop-demo', NULL, ?, NULL)",
+            (f"evt_{order_id}", payload, stamp),
+        )
+    conn.commit()
+    conn.close()
+    Db(str(path))
+    conn = sqlite3.connect(path)
+    got = dict(conn.execute("SELECT order_id, cancel_reason_code FROM orders"))
+    conn.close()
+    # ord_b: 이벤트가 지워져 모른다, ord_d: 계약 밖 값은 버린다
+    assert got == {"ord_a": "seller", "ord_b": None, "ord_c": None, "ord_d": None}
