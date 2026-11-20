@@ -36,7 +36,6 @@ from typing import Any
 import yaml
 
 from ax_agent_template.services import BY_ID, ENABLED_WITH
-from ax_agent_template.tenant import setting as tenant_setting
 
 ENABLED_ENV = "AX_ENABLED_SERVICES"
 ENABLED_FILE_ENV = "AX_ENABLED_SERVICES_FILE"
@@ -157,7 +156,7 @@ def load_org(path: str | None = None) -> dict[str, Assignment]:
     맡은 곳을 지어내지 않는다.
     """
     global _cache
-    path = path or tenant_setting(ORG_ENV)  # 환경변수 → 회사 연결에서 고른 회사의 조직도
+    path = path or os.getenv(ORG_ENV, "")
     if not path:
         return {}
     try:
