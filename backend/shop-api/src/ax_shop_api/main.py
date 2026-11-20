@@ -490,6 +490,8 @@ REFUND_ALLOWED = {"support"}
 INQUIRY_READERS = {"support", "admin"}
 # 데이터 조회(읽기 전용)는 분석을 하는 data와 관리자만
 DATA_READERS = {"data", "admin"}
+# 판매 기록 내보내기: data 수집기와 AXcellent 변화 감지기(dashboard-api, #1457)가 읽는다
+SALES_EXPORT_READERS = DATA_READERS | {"dashboard-api"}
 # 판매 집계(읽기 전용)는 data·관리자에 더해 AXcellent 고객지원(`support`)도 읽는다
 # (책별 클레임 비율의 분모)
 SALES_READERS = {"support", "data", "admin"}
@@ -1238,7 +1240,9 @@ def create_app(
     @app.post("/api/shop/orders/{order_id}/cancel")
     async def cancel(order_id: str, body: CancelIn, request: Request) -> dict:
         _own_order(request, order_id)
-        order = shop.cancel(order_id, body.reason_code)
+        # 구매자 토큰으로 취소하면 취소 주체는 언제나 buyer다(seller·system을 고르지 못한다)
+        reason = "buyer" if _identify(request).kind == "buyer" else body.reason_code
+        order = shop.cancel(order_id, reason)
         await outbox.flush(database)
         return _ok(order)
 
@@ -1904,7 +1908,7 @@ def create_app(
     def sales_export_page(
         cursor: str | None = None,
         limit: int = 500,
-        _: str = Depends(_caller(DATA_READERS)),
+        _: str = Depends(_caller(SALES_EXPORT_READERS)),
     ) -> dict:
         """판매 기록 내보내기 (data 수집기). 동기 핸들러라 스레드에서 읽는다(#959와 같은 이유)."""
         query = _query(ShopSalesExportQuery, cursor=cursor, limit=limit)
