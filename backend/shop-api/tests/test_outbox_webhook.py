@@ -24,9 +24,12 @@ def _env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("AGENT_TEMPLATE_MOCK", "1")
     monkeypatch.setenv(outbox.WEBHOOK_URL_ENV, URL)
     monkeypatch.setenv(outbox.COMPANY_KEY_ENV, KEY)
+    monkeypatch.delenv(outbox.TYPES_ENV, raising=False)
     events.reset_mock_bus()
+    outbox.reset_backoff()
     yield
     outbox.TRANSPORT = None
+    outbox.reset_backoff()
 
 
 class Receiver:
@@ -164,3 +167,75 @@ async def test_without_a_webhook_url_it_still_publishes_to_the_bus(monkeypatch) 
     assert await outbox.flush(db) == 2
     assert receiver.requests == []
     assert len(events.MOCK_PUBLISHED) == 2
+
+
+def _enqueue(db: Db, event_type: EventType, key: str, data: dict) -> None:
+    with db.tx() as conn:
+        outbox.enqueue(conn, event_type, data, key)
+
+
+@pytest.mark.asyncio
+async def test_only_the_chosen_types_go_to_the_webhook_and_the_rest_are_settled(
+    monkeypatch,
+) -> None:
+    """4단계: 장애 알림만 웹훅으로. 주문·환불은 감지기가 맡으니 보내지 않고 막히지도 않는다."""
+    monkeypatch.setenv(outbox.TYPES_ENV, "shop.degraded, shop.recovered")
+    receiver = Receiver()
+    _install(receiver)
+    db = Db(":memory:")
+    _fill(db, 2)  # order.created 2건
+    _enqueue(
+        db,
+        EventType.SHOP_DEGRADED,
+        "shop.degraded:t1",
+        {"metric_code": "error_rate_5xx", "value": 0.5, "threshold": 0.02},
+    )
+    assert await outbox.flush(db) == 3
+    assert _unsent(db) == 0
+    assert [json.loads(r.content)["type"] for r in receiver.requests] == ["shop.degraded"]
+
+
+@pytest.mark.asyncio
+async def test_without_chosen_types_every_event_still_goes(monkeypatch) -> None:
+    monkeypatch.setenv(outbox.TYPES_ENV, " , ")
+    receiver = Receiver()
+    _install(receiver)
+    db = Db(":memory:")
+    _fill(db, 2)
+    assert await outbox.flush(db) == 2
+    assert len(receiver.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_repeated_failures_wait_longer_before_trying_again_and_nothing_is_lost(
+    monkeypatch,
+) -> None:
+    """받는 쪽이 계속 막혀 있으면 요청마다 두드리지 않고, 시간이 지나면 다시 보내 잃지 않는다."""
+    now = [1000.0]
+    monkeypatch.setattr(outbox, "_clock", lambda: now[0])
+    receiver = Receiver(*([403] * outbox.BACKOFF_AFTER))
+    _install(receiver)
+    db = Db(":memory:")
+    _fill(db, 1)
+    for _ in range(outbox.BACKOFF_AFTER):
+        assert await outbox.flush(db) == 0
+    tried = len(receiver.requests)
+    assert tried == outbox.BACKOFF_AFTER
+    assert await outbox.flush(db) == 0  # 기다리는 중: 보내 보지도 않는다
+    assert len(receiver.requests) == tried
+    now[0] += outbox.BACKOFF_BASE_SECONDS + 0.1
+    assert await outbox.flush(db) == 1  # 시간이 지나면 다시 보내고 성공
+    assert _unsent(db) == 0
+    assert await outbox.flush(db) == 0  # 성공 뒤 기다림은 풀린다(남은 게 없을 뿐)
+
+
+def test_the_wait_doubles_and_stops_at_the_cap(monkeypatch) -> None:
+    now = [0.0]
+    monkeypatch.setattr(outbox, "_clock", lambda: now[0])
+    waits = []
+    for _ in range(outbox.BACKOFF_AFTER + 10):
+        outbox._failed()
+        waits.append(outbox._retry_at - now[0])
+    assert waits[outbox.BACKOFF_AFTER - 1] == outbox.BACKOFF_BASE_SECONDS
+    assert waits[outbox.BACKOFF_AFTER] == outbox.BACKOFF_BASE_SECONDS * 2
+    assert waits[-1] == outbox.BACKOFF_MAX_SECONDS

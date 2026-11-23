@@ -11,6 +11,17 @@
 받는 쪽이 그 밖의 4xx(형식 거부 등)로 돌려주면 다시 보내도 같으므로 오류 로그를 남기고 보낸 것으로
 친다. 그래야 뒤에 쌓인 장애 알림(`shop.degraded`)이 막히지 않는다.
 
+보낼 종류 고르기(`AX_EVENTS_WEBHOOK_TYPES`, 쉼표 구분)
+- 비어 있으면 모든 이벤트를 웹훅으로 보낸다(지금까지와 같다).
+- 값이 있으면 그 종류만 웹훅으로 보내고, 나머지는 보내지 않고 보낸 것으로 친다. AXcellent 감지기가
+  사이트 API를 읽어 환불·취소를 직접 알아내는 4단계용이다(`shop.degraded,shop.recovered`만 남김).
+  회사 키를 빼서 웹훅을 막으면 장애 알림까지 끊기고 맨 앞 이벤트가 403으로 영영 막히므로, 키는 두고
+  종류만 줄인다.
+
+연달아 실패하면(`BACKOFF_AFTER`번부터) 다시 보내기 전 기다리는 시간을 두 배씩 늘린다(최대
+`BACKOFF_MAX_SECONDS`). 받는 쪽이 막혀 있는 동안 주문·결제 요청마다 두드리지 않는다. 한 번이라도
+보내지면 처음으로 돌아간다. 이벤트는 버리지 않는다.
+
 `flush` 한 번은 오래된 순으로 `FLUSH_BATCH`건까지만 읽어 보낸다. 미발행이 수십만 건 쌓여도
 한꺼번에 메모리로 읽지 않아 서버가 멈추지 않는다(로컬 주문 48만 건에서 시작하자마자
 1.3GB·`/health` 무응답). 쌓인 것은 주기 판정 루프가 묶음씩 이어서 비운다(`drain`).
@@ -20,9 +31,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import sqlite3
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -35,6 +48,10 @@ from ax_shop_api.db import TENANT_ID, Db
 SOURCE = "shop-api"
 WEBHOOK_URL_ENV = "AX_EVENTS_WEBHOOK_URL"
 COMPANY_KEY_ENV = "AX_COMPANY_KEY"
+TYPES_ENV = "AX_EVENTS_WEBHOOK_TYPES"
+BACKOFF_AFTER = 3  # 이만큼 연달아 실패하면 기다리기 시작한다
+BACKOFF_BASE_SECONDS = 5.0
+BACKOFF_MAX_SECONDS = 300.0
 TIMEOUT_SECONDS = 5.0
 # 다시 보내면 될 수 있는 응답 (그 밖의 4xx는 받는 쪽이 이 이벤트를 거부한 것)
 RETRY_STATUSES = frozenset({401, 403, 408, 429})
@@ -42,6 +59,32 @@ RETRY_STATUSES = frozenset({401, 403, 408, 429})
 TRANSPORT: httpx.AsyncBaseTransport | None = None
 
 logger = logging.getLogger("ax.shop.outbox")
+
+
+_clock = time.monotonic  # 테스트에서 바꿔 끼운다
+_fail_streak = 0
+_retry_at = 0.0
+
+
+def reset_backoff() -> None:
+    global _fail_streak, _retry_at
+    _fail_streak = 0
+    _retry_at = 0.0
+
+
+def _failed() -> None:
+    global _fail_streak, _retry_at
+    _fail_streak += 1
+    if _fail_streak >= BACKOFF_AFTER:
+        wait = BACKOFF_BASE_SECONDS * 2 ** (_fail_streak - BACKOFF_AFTER)
+        _retry_at = _clock() + min(BACKOFF_MAX_SECONDS, wait)
+
+
+def webhook_types() -> frozenset[str] | None:
+    """웹훅으로 보낼 종류. 설정이 비어 있으면 None(전부 보낸다)."""
+    raw = os.getenv(TYPES_ENV) or ""
+    picked = frozenset(t.strip() for t in raw.split(",") if t.strip())
+    return picked or None
 
 
 class DeliveryFailed(Exception):
@@ -116,23 +159,32 @@ async def flush(db: Db, *, batch: int = FLUSH_BATCH) -> int:
     if not key:
         logger.warning("%s가 없어 이벤트를 보내지 않는다 (미발행 %s건)", COMPANY_KEY_ENV, len(rows))
         return 0
+    if _clock() < _retry_at:
+        return 0
     async with httpx.AsyncClient(transport=TRANSPORT, timeout=TIMEOUT_SECONDS) as client:
-        return await _send_rows(db, rows, (client, url, key))
+        return await _send_rows(db, rows, (client, url, key), webhook_types())
 
 
 async def _send_rows(
-    db: Db, rows: list[sqlite3.Row], webhook: tuple[httpx.AsyncClient, str, str] | None
+    db: Db,
+    rows: list[sqlite3.Row],
+    webhook: tuple[httpx.AsyncClient, str, str] | None,
+    types: frozenset[str] | None = None,
 ) -> int:
     sent = 0
     for row in rows:
         try:
             if webhook is None:
                 await publish(EventEnvelope.model_validate_json(row["payload"]))
+            elif types is not None and json.loads(row["payload"]).get("type") not in types:
+                pass  # 이 종류는 감지기가 맡는다. 보내지 않고 보낸 것으로 친다
             else:
                 await _post(*webhook, row["payload"], row["event_id"])
+                reset_backoff()
         except NotImplementedError:  # Redis 연동 전. 미발행으로 남겨 둔다
             break
         except DeliveryFailed as error:
+            _failed()
             logger.warning("이벤트를 보내지 못해 다음에 다시 보낸다 %s: %s", row["event_id"], error)
             break
         with db.tx() as conn:

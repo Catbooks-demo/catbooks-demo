@@ -61,6 +61,7 @@ SHOP_CLIENT_KEYS="<설치>/<서비스>:<키>:<read|write>,..."
 | --- | --- |
 | `AX_EVENTS_WEBHOOK_URL` | AXcellent 알림 받는 주소 (`.../api/dashboard/events`). 비우면 지금처럼 Redis 이벤트 버스에 직접 넣는다(전환 전까지만) |
 | `AX_COMPANY_KEY` | AXcellent가 발급한 회사 키. `Authorization: Bearer`로 보낸다. `.env`에만 둔다 |
+| `AX_EVENTS_WEBHOOK_TYPES` | 웹훅으로 보낼 이벤트 종류(쉼표 구분). 비우면 전부. 4단계(감지기가 환불·취소를 맡음)에는 `shop.degraded,shop.recovered`만 두고 나머지는 보내지 않는다. 회사 키는 그대로 둔다 |
 
 ## 규칙
 
