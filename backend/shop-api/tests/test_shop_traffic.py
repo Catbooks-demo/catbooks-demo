@@ -251,3 +251,52 @@ def test_write_pid_file_without_a_path_or_unwritable_does_not_raise(tmp_path: Pa
     traffic.write_pid_file("")
     traffic.write_pid_file(str(tmp_path / "no" / "dir" / "x.json"))  # 적지 못해도 멈추지 않는다
     assert not (tmp_path / "no").exists()
+
+
+# ---------------------------------------------------------------- 로그인 강제 서버 (운영)
+def test_buyer_paths_use_the_admin_token_when_login_is_required(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """운영은 구매자 로그인 강제라 토큰 없이 부르면 구매자 목록이 비어 주문이 0건이 됐다(11/23)."""
+    monkeypatch.setenv("SHOP_BUYER_AUTH", "required")
+    bare = _caller(client)
+    assert traffic.order_buyers(bare) == []  # 고치기 전 모습: 401 → 빈 목록
+
+    shop = traffic.with_token(bare, "adm-token")
+    buyers = traffic.order_buyers(shop)
+    assert buyers
+    product = _products(client)[0]["product_id"]
+    status, order = shop(
+        "POST",
+        "/api/shop/orders",
+        {"buyer_id": buyers[0], "items": [{"product_id": product, "qty": 1}]},
+    )
+    assert status == 201
+    status, paid = shop(
+        "POST", f"/api/shop/orders/{order['data']['order_id']}/payments", {"method_code": "card"}
+    )
+    assert status == 200 and paid["data"]["status"] == "paid"
+    st, _ = shop(
+        "POST",
+        "/api/shop/inquiries",
+        {
+            "buyer_id": buyers[0],
+            "order_id": order["data"]["order_id"],
+            "subject": "결제",
+            "body": "확인 부탁",
+        },
+    )
+    assert st in (200, 201)
+
+
+def test_with_token_keeps_an_explicit_token() -> None:
+    seen = []
+
+    def call(method, path, body=None, token=None):
+        seen.append(token)
+        return 200, {}
+
+    shop = traffic.with_token(call, "adm-token")
+    shop("GET", "/x")
+    shop("GET", "/x", None, "other")
+    assert seen == ["adm-token", "other"]

@@ -123,6 +123,18 @@ USERS_PATH = "/api/shop/users?real_only=true&limit=1000"
 SYNTHETIC_FROM = 100_001  # 가상 회원 구간(ax_shop_api.synthetic_ids). 여기에는 주문을 넣지 않는다
 
 
+def with_token(call: Call, token: str) -> Call:
+    """구매자 경로(구매자 목록·주문·결제·문의)를 `admin` 토큰으로 부르는 `call`.
+
+    운영 서버는 구매자 로그인을 강제(`required`)해서 토큰 없이 부르면 401이 난다. 그러면 구매자
+    목록이 비어 "구매자가 없어 대기 중"만 반복하고 주문이 0건이 된다(11/23 장애 주입 재시험)."""
+
+    def authed(method: str, path: str, body: dict | None = None, token_: str | None = None):
+        return call(method, path, body, token_ or token or None)
+
+    return authed
+
+
 def order_buyers(call: Call) -> list[str]:
     """주문을 넣을 구매자: 시드·실제 가입자만(가상 회원은 서버가 빼고 여기서 한 번 더 뺀다)."""
     _, users = call("GET", USERS_PATH)
@@ -408,9 +420,12 @@ def main() -> int:
             print(f"{now()} 재고 확인 오류: {error}", file=sys.stderr, flush=True)
         time.sleep(STOCK_CHECK_EVERY_S)
     no_buyer_logged = 0.0
+    if not watch.token:
+        _print(f"{now()} 경고: 관리자 토큰이 없어 로그인 강제 서버에서는 주문을 넣지 못한다")
+    shop = with_token(call, watch.token)
     while True:
         try:
-            buyers = order_buyers(call)
+            buyers = order_buyers(shop)
             _, products = call("GET", "/api/shop/products")
             items = watch.check(products.get("data", []))
             if not buyers and time.monotonic() - no_buyer_logged >= WAIT_LOG_EVERY_S:
@@ -420,7 +435,7 @@ def main() -> int:
                 _print(f"{now()} 주문할 구매자(시드·실제 가입자)가 없어 대기 중")
             if buyers and items:
                 picked = rng.sample(items, k=min(len(items), rng.choice([1, 1, 2])))
-                status, order = call(
+                status, order = shop(
                     "POST",
                     "/api/shop/orders",
                     {
@@ -430,7 +445,7 @@ def main() -> int:
                 )
                 if status == 201:
                     order_id = order["data"]["order_id"]
-                    status, paid = call(
+                    status, paid = shop(
                         "POST", f"/api/shop/orders/{order_id}/payments", {"method_code": "card"}
                     )
                     result = paid.get("data", {}).get("status") or paid.get("error", {}).get("code")
@@ -444,7 +459,7 @@ def main() -> int:
                             "subject": subject,
                             "body": body,
                         }
-                        st, _ = call("POST", "/api/shop/inquiries", inquiry)
+                        st, _ = shop("POST", "/api/shop/inquiries", inquiry)
                         print(f"{now()} {order_id} 고객 문의 접수 {st}", flush=True)
                 else:
                     print(f"{now()} 주문 실패 {status} {order.get('error')}", flush=True)
