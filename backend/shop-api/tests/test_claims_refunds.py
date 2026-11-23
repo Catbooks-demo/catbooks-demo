@@ -264,6 +264,68 @@ def test_refund_cannot_exceed_the_payment_or_hit_unpaid_payments(client: TestCli
     assert zero.status_code == 422
 
 
+def _cancel_refund(client: TestClient, payment_id: str, amount: int, key: str, **extra):  # noqa: ANN003, ANN202
+    body = {"refund_amount": amount, "idempotency_key": key, "cancel_order": True, **extra}
+    return client.post(f"/api/shop/payments/{payment_id}/refund", json=body, headers=SUPPORT)
+
+
+def test_cancel_order_on_a_full_refund_before_shipping_cancels_and_publishes(
+    client: TestClient,
+) -> None:
+    paid = _paid_order(client)
+    payment = paid["payments"][0]
+    stock_before = client.get("/api/shop/products/prd_0001").json()["data"]["stock"]
+    first = _cancel_refund(client, payment["payment_id"], payment["amount"], "ctx:claim:9")
+    assert first.status_code == 201
+    assert first.json()["data"]["order_cancelled"] is True
+    order = client.get(f"/api/shop/orders/{paid['order_id']}").json()["data"]
+    assert order["status"] == "cancelled"
+    assert order["refunded_amount"] == payment["amount"]
+    stock_after = client.get("/api/shop/products/prd_0001").json()["data"]["stock"]
+    assert stock_after == stock_before + 1  # 재고를 되돌린다
+    types = [e.type for e in events.MOCK_PUBLISHED]
+    assert types.count(EventType.PAYMENT_REFUNDED) == 1
+    assert types.count(EventType.ORDER_CANCELLED) == 1
+    cancelled = next(e for e in events.MOCK_PUBLISHED if e.type == EventType.ORDER_CANCELLED)
+    assert cancelled.data["order_id"] == paid["order_id"]
+    assert cancelled.data["reason_code"] == "buyer"
+    replay = _cancel_refund(client, payment["payment_id"], payment["amount"], "ctx:claim:9")
+    assert replay.status_code == 200 and replay.json()["data"]["order_cancelled"] is True
+    assert [e.type for e in events.MOCK_PUBLISHED].count(EventType.ORDER_CANCELLED) == 1
+
+
+def test_cancel_order_keeps_the_order_on_partial_refund_shipping_or_when_not_asked(
+    client: TestClient,
+) -> None:
+    partial = _paid_order(client)
+    payment = partial["payments"][0]
+    res = _cancel_refund(client, payment["payment_id"], payment["amount"] - 1000, "p1")
+    assert res.status_code == 201 and res.json()["data"]["order_cancelled"] is False
+    order = client.get(f"/api/shop/orders/{partial['order_id']}").json()["data"]
+    assert order["status"] == "paid"
+
+    shipped = _paid_order(client)
+    assert (
+        client.post(
+            f"/api/shop/admin/orders/{shipped['order_id']}/shipped", json={}, headers=ADMIN
+        ).status_code
+        == 200
+    )
+    pay = shipped["payments"][0]
+    res = _cancel_refund(
+        client, pay["payment_id"], pay["amount"], "p2", cancel_reason_code="seller"
+    )
+    assert res.status_code == 201 and res.json()["data"]["order_cancelled"] is False
+    assert client.get(f"/api/shop/orders/{shipped['order_id']}").json()["data"]["status"] == "paid"
+
+    plain = _paid_order(client)
+    pay = plain["payments"][0]
+    res = _refund(client, pay["payment_id"], pay["amount"], "p3")  # cancel_order 없음: 예전 그대로
+    assert res.status_code == 201 and res.json()["data"]["order_cancelled"] is False
+    assert client.get(f"/api/shop/orders/{plain['order_id']}").json()["data"]["status"] == "paid"
+    assert not any(e.type == EventType.ORDER_CANCELLED for e in events.MOCK_PUBLISHED)
+
+
 def test_a_return_support_gave_up_on_can_be_put_back_by_a_person(client: TestClient) -> None:
     order = _paid_order(client)
     _claim_for_return(client, order)

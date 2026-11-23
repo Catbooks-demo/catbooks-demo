@@ -1226,6 +1226,21 @@
       },
       "RefundIn": {
         "properties": {
+          "cancel_order": {
+            "default": false,
+            "title": "Cancel Order",
+            "type": "boolean"
+          },
+          "cancel_reason_code": {
+            "default": "buyer",
+            "enum": [
+              "buyer",
+              "seller",
+              "system"
+            ],
+            "title": "Cancel Reason Code",
+            "type": "string"
+          },
           "context_id": {
             "anyOf": [
               {
