@@ -2,7 +2,8 @@
 
 환불은 고객지원이 `execute("refund_request")`에서 `executed`를 받은 뒤에만 부른다
 (API 계층이 `support` 토큰만 받는다). 같은 `idempotency_key`의 재요청은 이전 환불을 돌려주고
-(중복 지급 없음), 결제 금액을 넘는 환불은 거부한다. 환불이 반영되면 `payment.refunded`를,
+(중복 지급 없음), 결제 금액을 넘는 환불은 거부한다. 취소 클레임 지급(`cancel_order`)이고 전액·발송
+전이면 주문도 취소하고 `order.cancelled`를 남긴다. 환불이 반영되면 `payment.refunded`를,
 반품이 입고되면 `return.received`를 outbox에 넣는다(이벤트 발행은 호출하는 쪽이 저장 뒤
 `outbox.flush`로 한다).
 """
@@ -29,9 +30,18 @@ class Refunds:
         self.now = now
 
     def refund(
-        self, payment_id: str, amount: int, idempotency_key: str, context_id: str | None
+        self,
+        payment_id: str,
+        amount: int,
+        idempotency_key: str,
+        context_id: str | None,
+        cancel_reason_code: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
-        """결제 하나에 환불을 반영한다. 돌려주는 두 번째 값은 같은 키의 재요청이면 True다."""
+        """결제 하나에 환불을 반영한다. 돌려주는 두 번째 값은 같은 키의 재요청이면 True다.
+
+        `cancel_reason_code`가 있으면(취소 클레임 지급) 이 환불로 결제가 전액 환불되고 주문이
+        아직 발송 전일 때 주문도 취소한다: 재고를 되돌리고 `order.cancelled`를 남긴다.
+        조건이 안 맞으면(부분 환불·발송 뒤·이미 취소) 환불만 하고 주문은 그대로 둔다."""
         with self.db.tx() as conn:
             existing = conn.execute(
                 "SELECT * FROM refunds WHERE idempotency_key = ?", (idempotency_key,)
@@ -89,8 +99,39 @@ class Refunds:
                 data.model_dump(mode="json"),
                 f"payment.refunded:{refund_id}",
             )
+            if cancel_reason_code is not None and refunded + amount == payment["amount"]:
+                self._cancel_unshipped(conn, payment["order_id"], cancel_reason_code, stamp)
             row = conn.execute("SELECT * FROM refunds WHERE refund_id = ?", (refund_id,)).fetchone()
             return self._view(conn, row), False
+
+    @staticmethod
+    def _cancel_unshipped(conn: Any, order_id: str, reason_code: str, stamp: str) -> None:
+        """발송 전이고 아직 취소되지 않은 주문을 취소한다(재고 복구·`order.cancelled`)."""
+        order = conn.execute("SELECT * FROM orders WHERE order_id = ?", (order_id,)).fetchone()
+        if order is None or order["status"] == "cancelled" or order["shipped_at"] is not None:
+            return
+        for item in conn.execute(
+            "SELECT product_id, qty FROM order_items WHERE order_id = ?", (order_id,)
+        ):
+            conn.execute(
+                "UPDATE products SET stock = stock + ? WHERE product_id = ?",
+                (item["qty"], item["product_id"]),
+            )
+        conn.execute(
+            "UPDATE orders SET status = 'cancelled', cancel_reason_code = ?, updated_at = ? "
+            "WHERE order_id = ?",
+            (reason_code, stamp, order_id),
+        )
+        outbox.enqueue(
+            conn,
+            EventType.ORDER_CANCELLED,
+            {
+                "order_id": order_id,
+                "reason_code": reason_code,
+                "cancelled_amount": order["total_amount"],
+            },
+            f"order.cancelled:{order_id}",
+        )
 
     @staticmethod
     def _refunded(conn: Any, payment_id: str) -> int:
@@ -104,7 +145,11 @@ class Refunds:
         payment = conn.execute(
             "SELECT amount FROM payments WHERE payment_id = ?", (row["payment_id"],)
         ).fetchone()
+        order = conn.execute(
+            "SELECT status FROM orders WHERE order_id = ?", (row["order_id"],)
+        ).fetchone()
         return {
+            "order_cancelled": order is not None and order["status"] == "cancelled",
             "refund_id": row["refund_id"],
             "payment_id": row["payment_id"],
             "order_id": row["order_id"],

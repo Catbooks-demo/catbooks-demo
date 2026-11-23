@@ -450,6 +450,10 @@ class RefundIn(BaseModel):
     refund_amount: int = Field(gt=0)
     idempotency_key: str = Field(min_length=1)  # `claim.context_id:refund_request:claim:<id>`
     context_id: str | None = None
+    # 취소 클레임 지급용(선택). true이고 이 환불로 결제가 전액 환불되며 아직 발송 전이면
+    # 주문도 취소한다(재고 복구, `order.cancelled`). 조건이 안 맞으면 환불만 한다
+    cancel_order: bool = False
+    cancel_reason_code: Literal["buyer", "seller", "system"] = "buyer"
 
 
 class CouponIn(BaseModel):
@@ -1841,7 +1845,11 @@ def create_app(
         _: str = Depends(_caller(REFUND_ALLOWED)),
     ) -> dict:
         refund, replayed = refunds.refund(
-            payment_id, body.refund_amount, body.idempotency_key, body.context_id
+            payment_id,
+            body.refund_amount,
+            body.idempotency_key,
+            body.context_id,
+            cancel_reason_code=body.cancel_reason_code if body.cancel_order else None,
         )
         await outbox.flush(database)
         if replayed:
