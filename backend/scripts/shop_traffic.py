@@ -25,6 +25,8 @@
     python scripts/shop_traffic.py
     SHOP_TRAFFIC_ORDERS_PER_MIN=60 python scripts/shop_traffic.py
     SHOP_TRAFFIC_REFILL=1 python scripts/shop_traffic.py
+    # 장애 주입 시험(가상 회원 사용)
+    SHOP_TRAFFIC_ALLOW_SYNTHETIC=1 SHOP_TRAFFIC_ORDERS_PER_MIN=10 python scripts/shop_traffic.py
 
 `SHOP_TRAFFIC_ORDERS_PER_MIN`이 없으면 예전 설정 `SHOP_TRAFFIC_INTERVAL_S`(기본 3초)를 쓴다.
 
@@ -120,7 +122,13 @@ def call(
 
 
 USERS_PATH = "/api/shop/users?real_only=true&limit=1000"
-SYNTHETIC_FROM = 100_001  # 가상 회원 구간(ax_shop_api.synthetic_ids). 여기에는 주문을 넣지 않는다
+ALL_USERS_PATH = "/api/shop/users?limit=1000"
+SYNTHETIC_FROM = (
+    100_001  # 가상 회원 구간(ax_shop_api.synthetic_ids). 기본은 여기에 주문을 넣지 않는다
+)
+# 1이면 가상 회원에게도 주문을 넣는다. 시드 구매자를 지우고 실제 가입자가 없는 운영 서버에서
+# 장애 주입 시험의 결제 표본을 만들 때만 켠다(가상 회원 주문은 원래 시연 데이터다)
+ALLOW_SYNTHETIC_ENV = "SHOP_TRAFFIC_ALLOW_SYNTHETIC"
 
 
 def with_token(call: Call, token: str) -> Call:
@@ -135,14 +143,20 @@ def with_token(call: Call, token: str) -> Call:
     return authed
 
 
-def order_buyers(call: Call) -> list[str]:
-    """주문을 넣을 구매자: 시드·실제 가입자만(가상 회원은 서버가 빼고 여기서 한 번 더 뺀다)."""
-    _, users = call("GET", USERS_PATH)
+def allow_synthetic(env: dict[str, str] | None = None) -> bool:
+    return (os.environ if env is None else env).get(ALLOW_SYNTHETIC_ENV, "0") == "1"
+
+
+def order_buyers(call: Call, *, synthetic: bool = False) -> list[str]:
+    """주문을 넣을 구매자: 기본은 시드·실제 가입자만(가상 회원은 서버가 빼고 여기서 한 번 더 뺀다).
+
+    `synthetic`이면 가상 회원도 넣는다(`SHOP_TRAFFIC_ALLOW_SYNTHETIC=1`, 장애 주입 시험용)."""
+    _, users = call("GET", ALL_USERS_PATH if synthetic else USERS_PATH)
     out = []
     for user in users.get("data", []):
         buyer = str(user.get("buyer_id", ""))
         number = buyer.removeprefix("buy_")
-        if number.isdigit() and int(number) < SYNTHETIC_FROM:
+        if number.isdigit() and (synthetic or int(number) < SYNTHETIC_FROM):
             out.append(buyer)
     return out
 
@@ -423,16 +437,22 @@ def main() -> int:
     if not watch.token:
         _print(f"{now()} 경고: 관리자 토큰이 없어 로그인 강제 서버에서는 주문을 넣지 못한다")
     shop = with_token(call, watch.token)
+    synthetic = allow_synthetic()
+    if synthetic:
+        _print(f"{now()} 가상 회원에게도 주문을 넣는다({ALLOW_SYNTHETIC_ENV}=1)")
     while True:
         try:
-            buyers = order_buyers(shop)
+            buyers = order_buyers(shop, synthetic=synthetic)
             _, products = call("GET", "/api/shop/products")
             items = watch.check(products.get("data", []))
             if not buyers and time.monotonic() - no_buyer_logged >= WAIT_LOG_EVERY_S:
                 # 시드 구매자를 지운 서버(scripts/clean_seed.py)에는 고를 구매자가 없다.
                 # 멈추지 않고 1분마다 알린다(가상 주문은 scripts/gen_synthetic_daily.py가 넣는다)
                 no_buyer_logged = time.monotonic()
-                _print(f"{now()} 주문할 구매자(시드·실제 가입자)가 없어 대기 중")
+                _print(
+                    f"{now()} 주문할 구매자(시드·실제 가입자)가 없어 대기 중"
+                    f" (시험이면 {ALLOW_SYNTHETIC_ENV}=1로 가상 회원 사용)"
+                )
             if buyers and items:
                 picked = rng.sample(items, k=min(len(items), rng.choice([1, 1, 2])))
                 status, order = shop(
