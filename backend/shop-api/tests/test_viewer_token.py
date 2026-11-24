@@ -1,12 +1,10 @@
-"""읽기 전용 열람 토큰(`SHOP_VIEWER_TOKEN`): 총괄 읽기 중계와 장애 상태 읽기만 열고 닫는다."""
+"""읽기 전용 열람 토큰(`SHOP_VIEWER_TOKEN`): 장애 상태 읽기만 열고 나머지는 닫는다."""
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from ax_agent_template import events
 from ax_agent_template.server import verify_token
-from ax_shop_api import orchestrator_relay
 from ax_shop_api.db import Db
 from ax_shop_api.main import create_app
 
@@ -21,11 +19,6 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SHOP_MONITOR_INTERVAL_S", "0")
     monkeypatch.setenv("SHOP_VIEWER_TOKEN", VIEWER_TOKEN)
     events.reset_mock_bus()
-    monkeypatch.setattr(
-        orchestrator_relay,
-        "TRANSPORT",
-        httpx.MockTransport(lambda r: httpx.Response(200, json={"data": [], "meta": {}})),
-    )
 
 
 @pytest.fixture
@@ -33,17 +26,22 @@ def client() -> TestClient:
     return TestClient(create_app(Db(":memory:")))
 
 
+def test_viewer_can_read_fault_state(client) -> None:
+    assert client.get("/api/shop/admin/faults", headers=VIEWER).status_code == 200
+
+
 @pytest.mark.parametrize(
     "path",
     [
         "/api/shop/admin/orchestrator/incidents",
-        "/api/shop/admin/orchestrator/incidents/ctx_inc_abc123",
         "/api/shop/admin/orchestrator/departments",
-        "/api/shop/admin/faults",
+        "/api/shop/admin/marketing/briefs",
+        "/api/shop/admin/marketing/outage-sns-drafts",
     ],
 )
-def test_viewer_can_read_orchestrator_and_fault_state(client, path) -> None:
-    assert client.get(path, headers=VIEWER).status_code == 200
+def test_removed_ax_read_relays_are_gone(client, path) -> None:
+    """총괄·마케팅 읽기 중계는 화면이 AXcellent로 옮겨 가 걷어냈다(로드맵 4단계)."""
+    assert client.get(path, headers=ADMIN).status_code == 404
 
 
 @pytest.mark.parametrize(
@@ -77,23 +75,19 @@ def test_viewer_cannot_stand_in_for_a_write_that_admin_can_do(client) -> None:
 
 
 def test_a_wrong_token_is_still_unauthorized(client) -> None:
-    response = client.get(
-        "/api/shop/admin/orchestrator/incidents", headers={"Authorization": "Bearer nope"}
-    )
+    response = client.get("/api/shop/admin/faults", headers={"Authorization": "Bearer nope"})
     assert response.status_code == 401
 
 
 def test_viewer_is_off_when_unset(client, monkeypatch) -> None:
     monkeypatch.delenv("SHOP_VIEWER_TOKEN")
-    response = client.get("/api/shop/admin/orchestrator/incidents", headers=VIEWER)
+    response = client.get("/api/shop/admin/faults", headers=VIEWER)
     assert response.status_code == 401
 
 
 def test_a_short_viewer_token_is_not_accepted(client, monkeypatch) -> None:
     monkeypatch.setenv("SHOP_VIEWER_TOKEN", "short")
-    response = client.get(
-        "/api/shop/admin/orchestrator/incidents", headers={"Authorization": "Bearer short"}
-    )
+    response = client.get("/api/shop/admin/faults", headers={"Authorization": "Bearer short"})
     assert response.status_code == 401
 
 
