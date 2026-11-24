@@ -300,3 +300,28 @@ def test_with_token_keeps_an_explicit_token() -> None:
     shop("GET", "/x")
     shop("GET", "/x", None, "other")
     assert seen == ["adm-token", "other"]
+
+
+# ---------------------------------------------------------------- 가상 회원 스위치 (장애 주입 시험)
+def test_synthetic_buyers_are_used_only_when_switched_on() -> None:
+    """운영은 시드 구매자를 지우고 실제 가입자가 0명이라 주문을 못 넣었다(11/24 장애 주입 3차)."""
+    paths = []
+
+    def call(method, path, body=None, token=None):
+        paths.append(path)
+        if "real_only=true" in path:
+            return 200, {"data": []}  # 서버가 가상 회원을 빼고 준다
+        return 200, {
+            "data": [{"buyer_id": "buy_100001"}, {"buyer_id": "buy_100002"}, {"buyer_id": "x"}]
+        }
+
+    assert traffic.order_buyers(call) == []
+    assert traffic.order_buyers(call, synthetic=True) == ["buy_100001", "buy_100002"]
+    assert "real_only=true" in paths[0] and "real_only" not in paths[1]
+
+
+def test_synthetic_switch_is_off_unless_exactly_one() -> None:
+    assert traffic.allow_synthetic({}) is False
+    assert traffic.allow_synthetic({"SHOP_TRAFFIC_ALLOW_SYNTHETIC": "0"}) is False
+    assert traffic.allow_synthetic({"SHOP_TRAFFIC_ALLOW_SYNTHETIC": "true"}) is False
+    assert traffic.allow_synthetic({"SHOP_TRAFFIC_ALLOW_SYNTHETIC": "1"}) is True
