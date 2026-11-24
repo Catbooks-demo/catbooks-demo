@@ -49,8 +49,6 @@ from ax_shop_api import (
     idea_inbox,
     inbox,
     inquiries,
-    marketing_client,
-    orchestrator_relay,
     outbox,
     retention,
     support_client,
@@ -499,15 +497,12 @@ SALES_EXPORT_READERS = DATA_READERS | {"dashboard-api"}
 # 판매 집계(읽기 전용)는 data·관리자에 더해 AXcellent 고객지원(`support`)도 읽는다
 # (책별 클레임 비율의 분모)
 SALES_READERS = {"support", "data", "admin"}
-# 총괄 사건 읽기 중계는 관리자와 읽기 전용 열람자(`viewer`)만.
-# 사람 로그인(소유자·공동소유자·분야 관리자)은 사람 인증 뒤에 붙인다
-ORCHESTRATOR_VIEWERS = {"admin", "viewer"}
 # 장애 주입 상태 읽기(GET)는 열람자도 본다. 주입·해제는 그대로 admin·infra만
 FAULT_STATE_READERS = INJECT_ALLOWED | RELEASE_ALLOWED | {"viewer"}
 # 읽기 전용 열람 토큰(`SHOP_VIEWER_TOKEN`). 에이전트 토큰 명부(`AX_AGENT_TOKENS`)와 따로 둔다.
 # 명부에 넣으면 총괄 등 다른 서버가 명부의 모든 에이전트를 받아 주는 길(`require_agent()`)이
 # 같이 열린다.
-# 이 서버의 `ORCHESTRATOR_VIEWERS`·`FAULT_STATE_READERS`에서만 통하고 그 밖은 403이다.
+# 이 서버의 `FAULT_STATE_READERS`(장애 상태 읽기)에서만 통하고 그 밖은 403이다.
 VIEWER_TOKEN_ENV = "SHOP_VIEWER_TOKEN"
 VIEWER_TOKEN_MIN_LENGTH = 24  # 짧은 값은 켜지 않는다
 
@@ -1319,49 +1314,6 @@ def create_app(
         state = shop.pg_ok()
         await outbox.flush(database)
         return _ok(state)
-
-    # --- 총괄 읽기 중계: 관리자 화면(shop-web)이 shop-api만 부르게 한다. GET만 ----------
-    @app.get("/api/shop/admin/orchestrator/incidents")
-    async def orchestrator_incidents(_: str = Depends(_caller(ORCHESTRATOR_VIEWERS))) -> dict:
-        data, meta = await orchestrator_relay.incidents()
-        return _ok(data, **meta)
-
-    @app.get("/api/shop/admin/orchestrator/incidents/{context_id}")
-    async def orchestrator_incident(
-        context_id: str, _: str = Depends(_caller(ORCHESTRATOR_VIEWERS))
-    ) -> dict:
-        data, meta = await orchestrator_relay.incident(context_id)
-        return _ok(data, **meta)
-
-    @app.get("/api/shop/admin/orchestrator/departments")
-    async def orchestrator_departments(_: str = Depends(_caller(ORCHESTRATOR_VIEWERS))) -> dict:
-        data, meta = await orchestrator_relay.departments()
-        return _ok(data, **meta)
-
-    # --- 마케팅 받은 기획안 읽기 중계(A2A 읽기 skill). 관리자와 읽기 전용 열람자만 ----------
-    @app.get("/api/shop/admin/marketing/briefs")
-    async def marketing_briefs(
-        limit: int = 50, _: str = Depends(_caller(ORCHESTRATOR_VIEWERS))
-    ) -> dict:
-        return _ok(await marketing_client.list_briefs(limit))
-
-    @app.get("/api/shop/admin/marketing/briefs/{proposal_id}")
-    async def marketing_brief(
-        proposal_id: str, _: str = Depends(_caller(ORCHESTRATOR_VIEWERS))
-    ) -> dict:
-        return _ok(await marketing_client.get_brief(proposal_id))
-
-    @app.get("/api/shop/admin/marketing/outage-sns-drafts")
-    async def marketing_outage_sns_drafts(
-        limit: int = 20,
-        include_merged: bool = False,
-        _: str = Depends(_caller(ORCHESTRATOR_VIEWERS)),
-    ) -> dict:
-        """장애 사과·보상 SNS 글 초안 읽기 중계. 초안만 보여 주고 게시하지 않는다.
-
-        `include_merged`(기본 false): 유사 초안 병합으로 접힌 원본(감사 기록)까지 본다.
-        """
-        return _ok(await marketing_client.list_outage_sns_drafts(limit, include_merged))
 
     # --- 공지 배너(SHOP-08): 고객 화면이 읽고, 마케팅 관문 토큰만 게시·해제한다 ---------
     @app.get("/api/shop/banners")
