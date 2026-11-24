@@ -45,7 +45,7 @@ export default function LoginPage() {
           <span className="font-medium">비밀번호</span>
           <input className="field" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
         </label>
-        <button className="btn-primary" disabled={busy}>{busy ? "로그인 중…" : "시작하기"}</button>
+        <button className="btn-primary" disabled={busy}>{busy ? "로그인 중…" : "로그인"}</button>
       </form>
       <p className="mt-4 text-center text-sm text-ink-500">
         아직 계정이 없나요? <Link href="/signup" className="font-semibold text-brand-600 underline">회원가입</Link>
