@@ -24,3 +24,24 @@ export function lastFailedPayment(o: Pick<Order, "payments">): Payment | null {
 
 /** 결제 실패 화면에서 문의 화면으로 가는 경로. 주문 번호만 넘긴다(개인정보 아님). */
 export const supportHref = (orderId: string) => `/support?order_id=${encodeURIComponent(orderId)}`;
+
+/** 결제 장애 원인 후보와 확정 상태. confirmed가 false면 '확정 아님'으로 표시한다. */
+export interface FailureCause { candidate: string | null; confidence: string; confirmed: boolean }
+
+/** 장애 원인 후보와 확정 상태를 조회한다. */
+export async function getFailureCause(orderId: string): Promise<FailureCause> {
+  const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}/failure-cause`);
+  if (!res.ok) throw new Error(`failure-cause ${res.status}`);
+  return (await res.json()) as FailureCause;
+}
+
+/** 운영자가 입력한 원인을 저장하고 확정 상태로 바꾼다. */
+export async function saveFailureCause(orderId: string, cause: string): Promise<FailureCause> {
+  const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}/failure-cause`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cause, confirmed: true }),
+  });
+  if (!res.ok) throw new Error(`failure-cause save ${res.status}`);
+  return (await res.json()) as FailureCause;
+}

@@ -131,8 +131,10 @@ export interface SignupInput {
 export type MeUpdate = Partial<Pick<Me, "display_name" | "age_band" | "gender" | "occupation">>;
 /** 목록(`GET /api/shop/users`)에는 `age_band`가 없고, 한 명 조회·선택(`sessions`) 응답에만 있다. */
 export interface DemoUser { buyer_id: string; display_name: string; age_band?: AgeBand | null }
-/** `GET /api/shop/banners`가 주는 게시 중 배너. `text`는 서버가 준 공개 문구 그대로 보여 준다. */
-export interface Banner { notice_id: string; text: string; status: string; valid_from: string | null; valid_to: string | null; context_id: string | null; created_at: string; ended_at: string | null }
+/** `GET /api/shop/banners`가 주는 게시 중 배너. `text`는 서버가 준 공개 문구 그대로 보여 준다. `posted_at`은 게시 시각, `channel`은 게시 채널(예: banner)이다. */
+export interface Banner { notice_id: string; text: string; status: string; valid_from: string | null; valid_to: string | null; context_id: string | null; created_at: string; ended_at: string | null; posted_at?: string | null; channel?: string | null }
+/** 장애 원인 후보. 확정 전에는 confirmed가 false다. */
+export interface PaymentFailureCause { candidate: string; likelihood: string; confirmed: boolean }
 /** 표시 이름(`name`)을 모르는 코드는 null이다. 지어내지 않고 코드를 그대로 보여 준다. */
 export interface Category { category_code: string; name: string | null; product_count: number }
 export interface CartPriceItem { product_id: string; title: string; qty: number; unit_price: number; line_amount: number }

@@ -6,6 +6,7 @@ import importlib.util
 import json
 import threading
 import unittest
+import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest import mock
@@ -97,6 +98,26 @@ class PaymentFaultTest(unittest.TestCase):
             payment_fault.main(["inject"])
         printed = "".join(str(c) for c in out.write.call_args_list + err.write.call_args_list)
         self.assertNotIn("mock:admin", printed)
+
+    def test_cause_candidate_unconfirmed_until_saved(self):
+        url = f"http://127.0.0.1:{self.server.server_port}/payment/fault/cause"
+
+        def post(body: dict) -> dict:
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(body).encode(),
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req) as res:
+                return json.load(res)["data"]
+
+        data = post({"candidate": "PG 응답 지연", "level": "낮음", "status": "확정 아님"})
+        self.assertEqual(data["candidate"], "PG 응답 지연")
+        self.assertEqual(data["level"], "낮음")
+        self.assertEqual(data["status"], "확정 아님")
+        data = post({"status": "확정"})
+        self.assertEqual(data["status"], "확정")
 
 
 if __name__ == "__main__":

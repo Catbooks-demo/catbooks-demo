@@ -31,6 +31,7 @@ export function NoticeBanners() {
           <li key={b.notice_id} role="status" className="break-words">
             <span className="mr-2 rounded bg-brand-600 px-1.5 py-0.5 text-[11px] font-bold text-white">공지</span>
             {b.text}
+            <span className="ml-2 text-[11px] text-ink-500">{b.published_at} · {b.channel}</span>
           </li>
         ))}
       </ul>

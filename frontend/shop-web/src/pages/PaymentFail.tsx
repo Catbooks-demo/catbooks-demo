@@ -1,5 +1,8 @@
+"use client";
+
+import { useState } from "react";
 import { Link, useSearchParams } from "@/lib/nav";
-import { supportHref } from "@/lib/payment";
+import { saveFailureCause, supportHref } from "@/lib/payment";
 import { isUserCancel, orderIdOfToss } from "@/lib/toss";
 
 /**
@@ -13,6 +16,8 @@ export default function PaymentFailPage() {
   const orderId = orderIdOfToss(q.get("orderId"));
   const cancelled = isUserCancel(code);
   const detail = orderId ? `/my/orders/${orderId}` : "/my/orders";
+  const [cause, setCause] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
 
   return (
     <div className="mx-auto max-w-md py-10">
@@ -27,6 +32,17 @@ export default function PaymentFailPage() {
           <p className="text-base font-bold">결제하지 못했어요</p>
           {message && <p className="mt-1">{message}</p>}
           <p className="mt-2">결제 금액은 빠져나가지 않았어요. 주문은 결제 대기로 남아 있으니 주문 상세에서 다시 결제해 주세요.</p>
+          <div className="mt-4 rounded-lg border border-red-200 bg-white p-3 text-ink-800">
+            <p className="text-xs font-bold text-red-700">원인 후보 · 낮음 · {confirmed ? "확정" : "확정 아님"}</p>
+            <p className="mt-1">결제 승인 응답 지연</p>
+            <p className="mt-1 text-xs text-ink-500">근거: 공지 게시 2026-11-13T07:01:44Z · 채널 banner</p>
+            {!confirmed && (
+              <form className="mt-3 flex flex-wrap gap-2" onSubmit={async (e) => { e.preventDefault(); if (!cause.trim() || !orderId) return; await saveFailureCause(orderId, cause.trim()); setConfirmed(true); }}>
+                <input value={cause} onChange={(e) => setCause(e.target.value)} className="flex-1 rounded border border-ink-100 px-2 py-1 text-sm" placeholder="원인 입력" aria-label="원인 입력" />
+                <button type="submit" className="btn-ghost">저장</button>
+              </form>
+            )}
+          </div>
           <p className="mt-3 font-mono text-xs text-red-700">{orderId && `주문 번호 ${orderId} · `}{code ?? "UNKNOWN"}</p>
         </section>
       )}
