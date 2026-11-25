@@ -24,3 +24,15 @@ export function lastFailedPayment(o: Pick<Order, "payments">): Payment | null {
 
 /** 결제 실패 화면에서 문의 화면으로 가는 경로. 주문 번호만 넘긴다(개인정보 아님). */
 export const supportHref = (orderId: string) => `/support?order_id=${encodeURIComponent(orderId)}`;
+
+/** 장애 상세 화면용. 원인 후보 1개를 담고, 신뢰도는 '낮음'으로 고정한다. 운영자가 확정하기 전까지 '확정 아님'으로 표시한다. */
+export interface IncidentCauseView { candidate: string | null; confidence: "낮음"; status: "확정" | "확정 아님" }
+
+export function incidentCauseView(c: { candidate?: string | null; confirmed?: boolean } | null | undefined): IncidentCauseView {
+  const confirmed = c?.confirmed === true;
+  return {
+    candidate: c?.candidate ?? null,
+    confidence: "낮음",
+    status: confirmed ? "확정" : "확정 아님",
+  };
+}

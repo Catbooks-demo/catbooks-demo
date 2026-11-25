@@ -68,6 +68,9 @@ class Monitor:
         # 장애가 났을 때 켜져 있던 시험·시연 장애 종류를 알려 주는 함수(쇼핑몰이 넣는다).
         # `shop.degraded`의 `fault_kind`로 싣는다. 모르면 None
         self.fault_kind: Callable[[], FaultKind | None] = lambda: None
+        # 장애 원인 후보를 알려 주는 함수(이상 직전 게시 중이던 공지 등). 신뢰도는 항상 "낮음"이고 확정이 아니다.
+        # 값은 {"candidate": str, "confidence": "낮음", "confirmed": False} 형태. 모르면 None
+        self.cause_candidate: Callable[[], dict[str, object] | None] = lambda: None
 
     def record(self, now: float, latency_ms: float, server_error: bool) -> None:
         self._samples.append((now, latency_ms, server_error))
@@ -152,6 +155,15 @@ class Monitor:
                 EventType.SHOP_DEGRADED, *breach, since=self._breach_since,
                 fault_kind=self.fault_kind(),
             )  # fmt: skip
+
+    def cause_view(self) -> dict[str, object] | None:
+        # 장애 상세에 싣는 원인 후보. 신뢰도는 항상 '낮음'이고 확정이 아니다(confirmed=False).
+        if not self.degraded:
+            return None
+        candidate = self.cause_candidate()
+        if not candidate:
+            return None
+        return {"candidate": str(candidate.get("candidate", "")), "confidence": "낮음", "confirmed": False}
 
     def released(self, released_by: str | None = None) -> None:
         """켜져 있던 장애 스위치를 껐을 때: 스위치 때문에 쌓인 표본만 버리고 "해제됨"을 남긴다.

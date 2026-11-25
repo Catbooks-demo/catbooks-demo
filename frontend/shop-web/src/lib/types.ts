@@ -63,7 +63,7 @@ export interface IdeaReceipt { idea_id: number; received: boolean }
 export type IdeaStatus = "pending" | "received" | "redirected" | "not_accepted";
 export interface MyIdea { idea_id: number; kind: IdeaKind; preview: string; status: IdeaStatus; notice: string | null; created_at: string }
 
-export interface OrderLineInput { product_id: string; qty: number }
+/** 장애 상세 응답의 원인 후보. 확정 전 추정이며 신뢰도 '낮음'과 확정 여부를 함께 보여 준다. */ export interface IncidentCauseCandidate { text: string; confidence: "낮음"; confirmed: boolean } export interface IncidentDetail { incident_id: string; cause_candidate: IncidentCauseCandidate | null } export interface OrderLineInput { product_id: string; qty: number }
 
 // ---------------------------------------------------------------- claims
 export type ClaimType = "cancel" | "return" | "exchange";
