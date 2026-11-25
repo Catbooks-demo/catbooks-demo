@@ -9,6 +9,11 @@ data 수집기가 `(updated_at, order_id)` 커서로 바뀐 주문을 차례로 
 - 상태가 바뀐 주문·환불이 생긴 주문은 `updated_at`이 바뀌어 다시 나온다(`refunds.py`가 환불 때
   주문 `updated_at`을 바꾼다).
 - 구매자 이름·연락처·주소는 담지 않는다(주문 표에도 없다). 쓰기 없음.
+- 범위로 거르기(선택, 11/25 로드맵 3단계 3-3): `created_from`·`created_to`는 접수 시각,
+  `refunded_from`·`refunded_to`는 그 범위에 환불이 하나라도 있는 주문. 모두 [from, to) 반열린
+  구간이고 한쪽 끝만 줘도 된다. 접수 범위와 환불 범위를 둘 다 주면 둘 중 하나에 들면 준다(OR:
+  그날 접수한 주문 + 그날 환불이 있는 옛 주문). 커서·순서는 범위 안에서 그대로다. 인자가 없으면
+  예전과 같다.
 """
 
 from __future__ import annotations
@@ -62,6 +67,31 @@ def decode_cursor(cursor: str) -> tuple[str, str]:
     return stamp, order_id
 
 
+def _range_filter(query: ShopSalesExportQuery) -> tuple[str, list[Any]]:
+    """접수·환불 범위 조건(SQL 조각과 값). 둘 다 있으면 OR, 없으면 빈 조각."""
+    parts: list[str] = []
+    args: list[Any] = []
+    if query.created_from is not None or query.created_to is not None:
+        cond = ["1"]
+        if query.created_from is not None:
+            cond.append("created_at >= ?")
+            args.append(_iso(query.created_from))
+        if query.created_to is not None:
+            cond.append("created_at < ?")
+            args.append(_iso(query.created_to))
+        parts.append("(" + " AND ".join(cond) + ")")
+    if query.refunded_from is not None or query.refunded_to is not None:
+        cond = ["r.order_id = orders.order_id"]
+        if query.refunded_from is not None:
+            cond.append("r.created_at >= ?")
+            args.append(_iso(query.refunded_from))
+        if query.refunded_to is not None:
+            cond.append("r.created_at < ?")
+            args.append(_iso(query.refunded_to))
+        parts.append("EXISTS (SELECT 1 FROM refunds r WHERE " + " AND ".join(cond) + ")")
+    return " OR ".join(parts), args
+
+
 def _payment_status(statuses: list[str]) -> str | None:
     """성공한 결제가 있으면 succeeded, 아니면 마지막 시도의 상태, 시도가 없으면 None."""
     if not statuses:
@@ -88,6 +118,10 @@ class SalesExport:
         if after is not None:
             sql += " AND (updated_at, order_id) > (?, ?)"
             args.extend(after)
+        ranges, range_args = _range_filter(query)
+        if ranges:
+            sql += f" AND ({ranges})"
+            args.extend(range_args)
         sql += " ORDER BY updated_at, order_id LIMIT ?"
         args.append(query.limit + 1)  # 하나 더 읽어 남은 것이 있는지 안다
         with self.db.tx() as conn:

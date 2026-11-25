@@ -32,6 +32,7 @@ from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_val
 from ax_agent_template.config import set_agent_name
 from ax_agent_template.server import verify_token
 from ax_agent_template.services import department_of
+from ax_contracts.data_access.shop_buyer_summaries import ShopBuyerSummariesQuery
 from ax_contracts.data_access.shop_customers import (
     CUSTOMERS_EXPORT_LIMIT_MAX,
     ShopCustomersExportQuery,
@@ -55,6 +56,7 @@ from ax_shop_api import (
     toss,
 )
 from ax_shop_api.accounts import Accounts
+from ax_shop_api.buyer_summaries import BuyerSummaries
 from ax_shop_api.db import Db
 from ax_shop_api.lookups import Lookups
 from ax_shop_api.promotions import Promotions
@@ -792,6 +794,7 @@ def create_app(
     promotions = Promotions(database)
     lookups = Lookups(database)
     sales_export = SalesExport(database)
+    buyer_summaries = BuyerSummaries(database)
     refunds = Refunds(database)
     storefront = Storefront(database)
     review_service = Reviews(database)
@@ -1865,15 +1868,41 @@ def create_app(
         return _ok(result.model_dump(mode="json"))
 
     @app.get("/api/shop/sales-export")
-    def sales_export_page(
+    def sales_export_page(  # noqa: PLR0913 - 커서·개수·접수 범위·환불 범위
         cursor: str | None = None,
         limit: int = 500,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        refunded_from: datetime | None = None,
+        refunded_to: datetime | None = None,
         _: str = Depends(_caller(SALES_EXPORT_READERS)),
     ) -> dict:
-        """판매 기록 내보내기 (data 수집기). 동기 핸들러라 스레드에서 읽는다(#959와 같은 이유)."""
-        query = _query(ShopSalesExportQuery, cursor=cursor, limit=limit)
+        """판매 기록 내보내기 (data 수집기). 동기 핸들러라 스레드에서 읽는다(#959와 같은 이유).
+
+        범위 인자(선택)는 [from, to) UTC이고 시간대가 없으면 400. 접수·환불 범위를 둘 다 주면 OR."""
+        query = _query(
+            ShopSalesExportQuery, cursor=cursor, limit=limit, created_from=created_from,
+            created_to=created_to, refunded_from=refunded_from, refunded_to=refunded_to,
+        )  # fmt: skip
         result = sales_export.export(query)
         return _ok(result.model_dump(mode="json"))
+
+    @app.get("/api/shop/buyer-summaries")
+    def buyer_summaries_page(
+        as_of: datetime,
+        cursor: Annotated[str | None, Query(max_length=200)] = None,
+        limit: int = 500,
+        changed_since: datetime | None = None,
+        _: str = Depends(_caller(SALES_EXPORT_READERS)),
+    ) -> dict:
+        """구매자 요약(`ShopBuyerSummariesResult`, data 하루 집계 입력). 가명 ID·시각·수만.
+
+        `as_of` 전 결제 완료 주문만 센다. `buyer_id` 순, `next_cursor`로 이어 받는다."""
+        query = _query(
+            ShopBuyerSummariesQuery, as_of=as_of, cursor=cursor, limit=limit,
+            changed_since=changed_since,
+        )  # fmt: skip
+        return _ok(buyer_summaries.summaries(query).model_dump(mode="json"))
 
     @app.get("/api/shop/sellers/{seller_id}/profile")
     async def seller_profile(seller_id: str, _: str = Depends(_caller(DATA_READERS))) -> dict:
